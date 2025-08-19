@@ -1,0 +1,28 @@
+{
+  "name": "postop-ai-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel dev",
+    "dev:web": "pnpm --filter web dev",
+    "dev:agent": "pnpm --filter agent dev",
+    "dev:all": "concurrently \"pnpm dev:web\" \"pnpm dev:agent\"",
+    "build": "pnpm --recursive build",
+    "build:web": "pnpm --filter web build",
+    "build:agent": "pnpm --filter agent build",
+    "start": "pnpm --parallel start",
+    "start:web": "pnpm --filter web start", 
+    "start:agent": "pnpm --filter agent start",
+    "agent": "pnpm --filter agent start",
+    "agent:dev": "pnpm --filter agent dev",
+    "agent:console": "pnpm --filter agent console",
+    "lint": "pnpm --recursive lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "prettier": "^3.4.2"
+  },
+  "packageManager": "pnpm@9.15.9"
+}
