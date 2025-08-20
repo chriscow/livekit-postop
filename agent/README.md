@@ -477,7 +477,7 @@ graph TD
     D --> E[Generate Calls from Discharge Orders]
     E --> F[Store in Redis]
     F --> G[Scheduler Daemon Picks Up]
-    G --> H[Execute Calls via Voice Service]
+    G --> H[Execute Calls via LiveKit]
     H --> I[Update Call Status]
     I --> J[Generate Reports]
 ```
@@ -516,7 +516,7 @@ graph TD
    - Patient consent verification
 
 **Current Status**: 
-- ✅ **Core System Complete**: Scheduling engine, LLM analysis, Redis storage, Voice service integration
+- ✅ **Core System Complete**: Scheduling engine, LLM analysis, Redis storage, LiveKit integration
 - ✅ **Demo System**: Comprehensive CLI tools for live demonstrations and testing
 - ✅ **Medical RAG**: Hybrid Redis/Annoy knowledge base with function tools
 - 🚧 **Production APIs**: REST endpoints for EMR integration (planned)
@@ -533,22 +533,22 @@ graph TD
 The system consists of six integrated components:
 
 ### Core Components
-- **PostOp Agent**: Voice agent with medical RAG integration for intelligent call handling
+- **PostOp Agent**: LiveKit voice agent with medical RAG integration for intelligent call handling
 - **LLM Analysis Engine**: GPT-4 powered transcript analysis that generates personalized call schedules
 - **Call Scheduler**: Redis-based scheduling with intelligent timing and retry logic
-- **Task Worker**: RQ-based asynchronous call execution with SIP integration
+- **Task Worker**: RQ-based asynchronous call execution with LiveKit SIP integration
 - **Medical RAG**: Hybrid Redis/Annoy knowledge base for real-time medical question answering
 - **Demo System**: Comprehensive CLI tools for live demonstrations and testing
 
 ### Data Flow
 ```
-[Discharge Instructions] → [LLM Analysis] → [Personalized Calls] → [Redis Storage] → [Scheduled Execution] → [Voice Agent] → [Patient Interaction]
+[Discharge Instructions] → [LLM Analysis] → [Personalized Calls] → [Redis Storage] → [Scheduled Execution] → [LiveKit Voice Agent] → [Patient Interaction]
                                                                                                                                     ↓
 [Follow-up Analysis] ← [Call Recording] ← [Conversation Summary] ← [Medical RAG Lookup] ← [Dynamic Response Generation]
 ```
 
 ### Integration Points
-- **SIP Integration**: Inbound/outbound telephony with automatic agent dispatch
+- **LiveKit SIP**: Inbound/outbound telephony with automatic agent dispatch
 - **Redis Storage**: Persistent call data, task queues, and vector embeddings
 - **OpenAI GPT-4**: Discharge instruction analysis and conversation generation
 - **Medical Knowledge**: Real-time RAG retrieval for accurate patient guidance
@@ -568,7 +568,7 @@ The system consists of six integrated components:
 
 ### Prerequisites
 - DigitalOcean account
-- Voice service account with SIP trunk configured
+- LiveKit account with SIP trunk configured
 - API keys for OpenAI, Deepgram, ElevenLabs
 
 ### 1. Create DigitalOcean Droplet

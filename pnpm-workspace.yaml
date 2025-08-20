@@ -1,2 +1,1 @@
-packages:
-  - "packages/*"
+# No packages - using monorepo structure with agent/ subdirectory

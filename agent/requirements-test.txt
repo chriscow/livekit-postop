@@ -1,0 +1,27 @@
+# Testing dependencies for PostOp AI scheduling system
+
+# Core testing framework
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+
+# For testing Redis functionality
+redis>=4.5.0
+
+# For testing RQ functionality  
+rq>=1.15.0
+rq-scheduler>=0.13.0
+
+# LiveKit SDK for testing call execution
+livekit>=0.10.0
+livekit-agents>=0.8.0
+livekit-plugins-openai>=0.8.0
+livekit-plugins-deepgram>=0.8.0
+livekit-plugins-elevenlabs>=0.8.0
+livekit-plugins-silero>=0.8.0
+
+# Additional testing utilities
+freezegun>=1.2.0  # For time-based testing
+responses>=0.23.0  # For mocking HTTP requests
+factory-boy>=3.2.0  # For test data generation
