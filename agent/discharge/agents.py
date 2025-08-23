@@ -222,8 +222,7 @@ analysis and planning inside the following tags in your thinking block:
 
 4. Plan the text message summary: - How can you condense the key information
    into clear, concise messages? Write draft versions. - What emojis would be
-   appropriate to use for each main point? - How should you structure the
-   messages for both English and Spanish versions? - Brainstorm at least 3
+   appropriate to use for each main point? - Brainstorm at least 3
    culturally appropriate phrases or references that could be used.
 
 5. Consider ongoing support: - What daily reminders would be most helpful for
@@ -237,8 +236,7 @@ After your analysis, create your response in the following format:
 conversation, using "PostOp:" to indicate when you're speaking)
 </conversation_responses>
 
-<text_messages> (Include the series of text messages here, numbered and in both
-English and Spanish) </text_messages>
+<text_messages> (Include the series of text messages here, numbered and in the patient's language) </text_messages>
 
 Remember to maintain a helpful, friendly, and professional tone throughout your
 interactions. Your text messages should include: 1. A friendly introduction
@@ -333,7 +331,7 @@ thinking block.
                     # Store conversation in Redis
                     self._log_conversation_message(session_id, "assistant", response_text)
         
-        await self.session.say("Hi all! dubba I'm Maya, thanks for dialing me in today. So Dr. Shah, who do we have in the room today?")
+        await self.session.say("Hi all! I'm Maya, thanks for dialing me in today. So Dr. Shah, who do we have in the room today?")
         
     async def _logged_say(self, message: str):
         """Wrapper for session.say that logs all outgoing messages"""
