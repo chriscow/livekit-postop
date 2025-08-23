@@ -24,3 +24,17 @@ Dockerfile*
 .gitignore
 .idea
 .vscode
+
+# Node artifacts
+node_modules/
+.next/
+dist/
+.turbo/
+
+# Testing
+coverage/
+.nyc_output/
+
+# Build artifacts 
+build/
+out/

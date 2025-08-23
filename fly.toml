@@ -16,16 +16,23 @@ kill_timeout = '5m0s'
 
 [env]
   PYTHONUNBUFFERED = '1'
+  # Add your environment variables here:
+  # OPENAI_API_KEY = 'your-openai-api-key'
+  # LIVEKIT_URL = 'your-livekit-url'
+  # LIVEKIT_API_KEY = 'your-livekit-api-key' 
+  # LIVEKIT_API_SECRET = 'your-livekit-api-secret'
+  # LIVEKIT_AGENT_NAME = 'postop-ai'
+  # REDIS_URL = 'your-redis-url'
 
 [http_service]
-  internal_port = 8081
+  internal_port = 3000
   auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
 [[services]]
   protocol = 'tcp'
-  internal_port = 8081
+  internal_port = 3000
 
   [[services.ports]]
     port = 80
@@ -34,6 +41,14 @@ kill_timeout = '5m0s'
   [[services.ports]]
     port = 443
     handlers = ['tls', 'http']
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8081
+
+  [[services.ports]]
+    port = 8081
+    handlers = ['http']
 
 [checks]
   [checks.healthcheck]
