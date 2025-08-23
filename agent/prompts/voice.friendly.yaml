@@ -8,5 +8,5 @@ template: |
   Pause: Brief, purposeful pauses after key instructions (e.g., "cross the street" and "turn right") to allow time for the listener to process the information and follow along.
 
   Emotion: Warm and supportive, conveying empathy and care, ensuring the listener feels guided and safe throughout the journey.
-description: "Friendly voice template for customer service interactions, focusing on clarity and reassurance."
-version: "1.0"
+description: 'Friendly voice template for customer service interactions, focusing on clarity and reassurance.'
+version: '1.0'

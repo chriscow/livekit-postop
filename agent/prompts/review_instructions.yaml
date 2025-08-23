@@ -9,18 +9,18 @@ template: |
 
   STRUCTURE YOUR RESPONSE TO THE PATIENT:
   1. Start with: "Thank you! Let me summarize your discharge instructions to make sure you understand what you need to do."
-  
+
   2. List the key instructions covered in simple language:
      - Use everyday words (not medical jargon)
      - Be specific about timing (when to do things)
      - Include what to watch for (symptoms, problems)
      
   3. If any important instructions were missed, gently mention: "I also want to make sure we covered [missing instruction] - did your nurse discuss this with you?"
-  
+
   4. End with: "I'll be calling you over the next few days to remind you about these instructions and answer any questions. Do you have any questions right now?"
 
   TONE: Warm, caring, and easy to understand. Speak directly to the patient like a helpful healthcare assistant. Keep sentences short and clear.
 
-description: "Review instructions template for providing patient-focused discharge summaries."
+description: 'Review instructions template for providing patient-focused discharge summaries.'
 
-version: "1.0"
+version: '1.0'

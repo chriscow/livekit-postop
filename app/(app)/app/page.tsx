@@ -7,4 +7,4 @@ export default async function Page() {
   const appConfig = await getAppConfig(hdrs);
 
   return <App appConfig={appConfig} />;
-} 
+}

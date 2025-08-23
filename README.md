@@ -17,6 +17,7 @@ An intelligent system for automated post-operative patient follow-up calls using
 
 1. **Copy environment variables**: `cp .env.example .env`
 2. **Fill in your API keys** in `.env`:
+
    ```bash
    # Required for local development
    LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
@@ -25,12 +26,13 @@ An intelligent system for automated post-operative patient follow-up calls using
    DEEPGRAM_API_KEY=your_deepgram_key
    OPENAI_API_KEY=your_openai_key
    ELEVEN_API_KEY=your_elevenlabs_key
-   
+
    # Redis Configuration (automatically handled by docker-compose)
    REDIS_URL=redis://localhost:6379/0
    REDIS_HOST=redis  # Docker service name
    REDIS_PORT=6379
    ```
+
 3. **Start all services**: `docker compose up --build`
 4. **Access services**:
    - Voice agent: Connects to voice server automatically
@@ -38,6 +40,7 @@ An intelligent system for automated post-operative patient follow-up calls using
    - Logs: `docker compose logs -f`
 
 ### Local Development Features
+
 - **Hot reload**: Code changes trigger rebuilds
 - **Local Redis**: Runs in Docker container with persistent volume
 - **Service isolation**: Each component runs in separate container
@@ -50,6 +53,7 @@ This section walks you through testing both the discharge instruction collection
 ### Prerequisites for Testing
 
 1. **Services Running**: Ensure all Docker services are up and healthy:
+
    ```bash
    docker compose ps
    # All services should show "Up" status
@@ -73,6 +77,7 @@ This section walks you through testing both the discharge instruction collection
 The discharge agent collects discharge instructions from medical staff, then uses advanced LLM analysis to automatically generate personalized follow-up calls. Supports multiple languages with real-time translation.
 
 #### 1. Start Console Mode
+
 ```bash
 # Run the discharge agent in interactive console mode
 docker compose exec postop-agent python discharge_main.py console
@@ -81,6 +86,7 @@ docker compose exec postop-agent python discharge_main.py console
 #### 2. Test Scenarios
 
 **Basic English Workflow:**
+
 1. Agent asks for recording consent → Say "Yes, you may record"
 2. Agent asks for patient name → Say "John Smith"
 3. Agent asks for language preference → Say "English"
@@ -90,6 +96,7 @@ docker compose exec postop-agent python discharge_main.py console
 7. Agent reads back collected instructions for confirmation
 
 **Translation Workflow:**
+
 1. Follow steps 1-2 above
 2. When asked for language → Say "Spanish" (or another language)
 3. Agent asks if you want real-time translation → Say "Yes"
@@ -97,13 +104,15 @@ docker compose exec postop-agent python discharge_main.py console
 5. Continue with verification process
 
 **Sample Discharge Instructions to Read:**
+
 ```
-"Take the compression bandage off in 24 hours. Keep the area clean and dry. 
-Take ibuprofen 400mg every 6 hours for pain. Return to school in 3 days. 
+"Take the compression bandage off in 24 hours. Keep the area clean and dry.
+Take ibuprofen 400mg every 6 hours for pain. Return to school in 3 days.
 Call us immediately if you see signs of infection like redness or swelling."
 ```
 
 #### 3. Expected Behavior
+
 - ✅ Agent should remain mostly silent during instruction collection
 - ✅ Agent should respond when directly addressed
 - ✅ Agent should translate in real-time if requested
@@ -119,6 +128,7 @@ Test the system's ability to schedule and manage follow-up calls based on discha
 You can generate test calls using the CLI tool or inline Python:
 
 **Using the CLI Tool (Recommended):**
+
 ```bash
 # Generate calls for a specific test patient
 docker compose exec postop-scheduler python tools/call_scheduler_cli.py generate-test-calls \
@@ -132,6 +142,7 @@ docker compose exec postop-scheduler python tools/call_scheduler_cli.py simulate
 ```
 
 **Using Inline Python:**
+
 ```bash
 # Create test calls for a sample patient
 docker compose exec postop-scheduler python -c "
@@ -159,6 +170,7 @@ for call in calls:
 #### 2. Check Scheduled Calls
 
 **Using the CLI Tool (Recommended):**
+
 ```bash
 # View pending calls with patient grouping
 docker compose exec postop-scheduler python tools/call_scheduler_cli.py list-pending --limit 10
@@ -171,6 +183,7 @@ docker compose exec postop-scheduler python tools/call_scheduler_cli.py stats
 ```
 
 **Using Inline Python:**
+
 ```bash
 # View all pending calls in Redis
 docker compose exec postop-scheduler python -c "
@@ -191,6 +204,7 @@ for call in calls:
 #### 3. Test Call Execution (Mock)
 
 **Using the CLI Tool (Recommended):**
+
 ```bash
 # Execute a specific call with mock mode
 docker compose exec postop-scheduler python tools/call_scheduler_cli.py execute-call <call-id> --mock
@@ -201,6 +215,7 @@ docker compose exec postop-scheduler python tools/call_scheduler_cli.py list-pen
 ```
 
 **Using Inline Python:**
+
 ```bash
 # Test the call execution workflow (without actually making calls)
 docker compose exec postop-worker python -c "
@@ -214,11 +229,11 @@ calls = scheduler.get_pending_calls(limit=1)
 if calls:
     call = calls[0]
     print(f'Testing execution of call: {call.id}')
-    
+
     # Update call status to simulate execution
     scheduler.update_call_status(call.id, CallStatus.IN_PROGRESS, 'Test execution started')
     print('Call marked as IN_PROGRESS')
-    
+
     # Simulate completion
     scheduler.update_call_status(call.id, CallStatus.COMPLETED, 'Test execution completed')
     print('Call marked as COMPLETED')
@@ -232,6 +247,7 @@ else:
 Test the medical knowledge retrieval system that agents use to answer patient questions.
 
 #### 1. Test Knowledge Search
+
 ```bash
 # Search for medical knowledge
 docker compose exec postop-agent python -c "
@@ -243,7 +259,7 @@ try:
         index_path='data/medical_rag',
         data_path='data/medical_rag/knowledge.pkl'
     )
-    
+
     # Test search queries
     queries = [
         'compression bandage care',
@@ -251,14 +267,14 @@ try:
         'wound infection signs',
         'activity restrictions after surgery'
     ]
-    
+
     for query in queries:
         print(f'Query: {query}')
         results = rag.search_knowledge(query, max_results=2)
         for i, result in enumerate(results, 1):
             print(f'  {i}. {result[:100]}...')
         print()
-        
+
 except Exception as e:
     print(f'RAG system not available: {e}')
     print('This is normal if medical knowledge hasn\'t been loaded yet.')
@@ -266,6 +282,7 @@ except Exception as e:
 ```
 
 #### 2. Add Test Knowledge
+
 ```bash
 # Add sample medical knowledge
 docker compose exec postop-agent python discharge/medical_rag.py add-redis \
@@ -282,12 +299,14 @@ docker compose exec postop-agent python discharge/medical_rag.py add-redis \
 Verify that call data is being stored and retrieved correctly from Redis.
 
 #### 1. Check Redis Keys
+
 ```bash
 # View all PostOp-related keys in Redis
 docker compose exec postop-redis redis-cli keys "postop:*"
 ```
 
 #### 2. Inspect Call Data
+
 ```bash
 # Look at stored call data
 docker compose exec postop-redis redis-cli --scan --pattern "postop:calls:*" | head -5 | while read key; do
@@ -302,6 +321,7 @@ done
 Test the complete end-to-end workflow:
 
 #### 1. Complete Patient Journey
+
 ```bash
 # Run the advanced integration test
 docker compose exec postop-scheduler python -c "
@@ -312,6 +332,7 @@ exec(open('tests/integration/test_advanced_integration.py').read())
 ```
 
 #### 2. Monitor System Activity
+
 ```bash
 # Watch logs in real-time while testing
 docker compose logs -f --tail=20
@@ -323,6 +344,7 @@ docker compose exec postop-redis redis-cli monitor
 ### Troubleshooting Test Issues
 
 **Agent won't start:**
+
 ```bash
 # Check agent logs
 docker compose logs postop-agent --tail=20
@@ -332,6 +354,7 @@ docker compose exec postop-agent env | grep -E "(LIVEKIT|DEEPGRAM|OPENAI|ELEVENL
 ```
 
 **No calls being generated:**
+
 ```bash
 # Check scheduler logs
 docker compose logs postop-scheduler --tail=20
@@ -344,6 +367,7 @@ print('Redis connected:', test_redis_connection())
 ```
 
 **Medical RAG not working:**
+
 ```bash
 # Check if medical knowledge exists
 docker compose exec postop-agent ls -la data/medical_rag/
@@ -355,6 +379,7 @@ docker compose exec postop-agent python discharge/medical_rag.py search-redis "t
 ### Expected Test Results
 
 After successful testing, you should see:
+
 - ✅ Discharge agent collects and verifies instructions accurately
 - ✅ Follow-up calls are scheduled and stored in Redis
 - ✅ Call execution workflow updates statuses correctly
@@ -365,6 +390,7 @@ After successful testing, you should see:
 ### Next Steps After Testing
 
 Once local testing is successful:
+
 1. **Production Deployment**: Follow the production deployment guide below
 2. **SIP Integration**: Configure your SIP trunk for actual phone calls
 3. **Monitoring Setup**: Implement logging and monitoring for production use
@@ -375,7 +401,9 @@ Once local testing is successful:
 The project includes comprehensive CLI tools for testing and management:
 
 #### Demo Call Trigger CLI (`tools/demo_call_trigger.py`) 🎬
+
 **Purpose**: Live demonstration and immediate call execution
+
 ```bash
 # List available calls for demo
 python tools/demo_call_trigger.py list-calls --demo-ready-only
@@ -397,7 +425,9 @@ python tools/demo_call_trigger.py clear-demo-data --confirm
 ```
 
 #### Call Scheduler CLI (`tools/call_scheduler_cli.py`)
+
 **Purpose**: Production call scheduling and management
+
 ```bash
 # Available commands
 python tools/call_scheduler_cli.py --help
@@ -412,7 +442,9 @@ python tools/call_scheduler_cli.py redis-status
 ```
 
 #### Medical Knowledge CLI (`tools/medical_knowledge_cli.py`)
+
 **Purpose**: Medical RAG knowledge base management
+
 ```bash
 # Available commands
 python tools/medical_knowledge_cli.py --help
@@ -431,17 +463,19 @@ In production, follow-up calls are generated when patients are discharged from m
 #### Integration Options
 
 **Option 1: EMR/EHR Integration (Recommended)**
+
 - **Hospital Integration**: EMR system calls PostOp API when patient is discharged
 - **Data Passed**: Patient ID, phone, discharge orders, discharge time
 - **Authentication**: API key or OAuth integration
 - **Example Integration**:
+
 ```python
 # Called by hospital EMR system when patient is discharged
 from scheduling.scheduler import CallScheduler
 
 def handle_patient_discharge(patient_data):
     scheduler = CallScheduler()
-    
+
     calls = scheduler.generate_calls_for_patient(
         patient_id=patient_data['patient_id'],
         patient_phone=patient_data['phone'],
@@ -449,20 +483,22 @@ def handle_patient_discharge(patient_data):
         discharge_time=patient_data['discharge_time'],
         selected_order_ids=patient_data['discharge_orders']
     )
-    
+
     # Schedule all generated calls
     for call in calls:
         scheduler.schedule_call(call)
-    
+
     return {"status": "success", "calls_scheduled": len(calls)}
 ```
 
 **Option 2: Manual Scheduling Interface**
+
 - **Web Dashboard**: Hospital staff manually enter patient information
 - **Batch Upload**: CSV/Excel import for multiple patients
 - **Verification**: Staff review and approve call schedules
 
 **Option 3: HL7 FHIR Integration**
+
 - **Standard Protocol**: Receive discharge summaries via FHIR
 - **Automated Processing**: Parse FHIR documents for relevant discharge orders
 - **Compliance**: Maintains healthcare data standards
@@ -487,6 +523,7 @@ graph TD
 **For Production Deployment, you'll need:**
 
 1. **API Endpoint** (not yet implemented):
+
    ```bash
    # Future endpoint structure
    POST /api/v1/patients/discharge
@@ -515,7 +552,8 @@ graph TD
    - Discharge order validation against available templates
    - Patient consent verification
 
-**Current Status**: 
+**Current Status**:
+
 - ✅ **Core System Complete**: Scheduling engine, LLM analysis, Redis storage, Voice service integration
 - ✅ **Demo System**: Comprehensive CLI tools for live demonstrations and testing
 - ✅ **Medical RAG**: Hybrid Redis/Annoy knowledge base with function tools
@@ -523,6 +561,7 @@ graph TD
 - 🚧 **Web Dashboard**: Patient call management interface (planned)
 
 **LLM-Powered Features**:
+
 - **Transcript Analysis**: Automatically analyzes discharge instructions and generates personalized call schedules
 - **Dynamic Call Types**: LLM determines optimal call types based on medical complexity
 - **Intelligent Scheduling**: Context-aware timing based on procedure requirements and patient needs
@@ -533,6 +572,7 @@ graph TD
 The system consists of six integrated components:
 
 ### Core Components
+
 - **PostOp Agent**: Voice agent with medical RAG integration for intelligent call handling
 - **LLM Analysis Engine**: GPT-4 powered transcript analysis that generates personalized call schedules
 - **Call Scheduler**: Redis-based scheduling with intelligent timing and retry logic
@@ -541,6 +581,7 @@ The system consists of six integrated components:
 - **Demo System**: Comprehensive CLI tools for live demonstrations and testing
 
 ### Data Flow
+
 ```
 [Discharge Instructions] → [LLM Analysis] → [Personalized Calls] → [Redis Storage] → [Scheduled Execution] → [Voice Agent] → [Patient Interaction]
                                                                                                                                     ↓
@@ -548,6 +589,7 @@ The system consists of six integrated components:
 ```
 
 ### Integration Points
+
 - **SIP Integration**: Inbound/outbound telephony with automatic agent dispatch
 - **Redis Storage**: Persistent call data, task queues, and vector embeddings
 - **OpenAI GPT-4**: Discharge instruction analysis and conversation generation
@@ -557,16 +599,17 @@ The system consists of six integrated components:
 
 ### Production vs Development
 
-| Component | Development | Production |
-|-----------|-------------|------------|
-| **Redis** | Docker container | DigitalOcean ValKey (managed) |
-| **Compute** | Local Docker | DigitalOcean Droplet |
-| **Scaling** | Fixed containers | Manual/vertical scaling |
-| **Backups** | None | Automated daily backups |
-| **Monitoring** | Docker logs | System monitoring + logs |
-| **SSL/TLS** | Not required | Required for ValKey |
+| Component      | Development      | Production                    |
+| -------------- | ---------------- | ----------------------------- |
+| **Redis**      | Docker container | DigitalOcean ValKey (managed) |
+| **Compute**    | Local Docker     | DigitalOcean Droplet          |
+| **Scaling**    | Fixed containers | Manual/vertical scaling       |
+| **Backups**    | None             | Automated daily backups       |
+| **Monitoring** | Docker logs      | System monitoring + logs      |
+| **SSL/TLS**    | Not required     | Required for ValKey           |
 
 ### Prerequisites
+
 - DigitalOcean account
 - Voice service account with SIP trunk configured
 - API keys for OpenAI, Deepgram, ElevenLabs
@@ -574,6 +617,7 @@ The system consists of six integrated components:
 ### 1. Create DigitalOcean Droplet
 
 **Recommended Configuration:**
+
 - **Size**: 8GB RAM, 4 CPU ($48/month)
 - **Region**: Choose closest to your users for voice latency
 - **Image**: Ubuntu 22.04 LTS
@@ -624,6 +668,7 @@ nano .env  # Fill in your actual API keys and configuration
 ```
 
 **Production Environment Variables:**
+
 ```bash
 # LiveKit Configuration
 LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
@@ -721,6 +766,7 @@ sudo systemctl status postop-ai
 ### 8. Backups (Managed by ValKey)
 
 **Automatic Backups**: DigitalOcean ValKey handles backups automatically:
+
 - **Daily backups**: Retained for 7 days
 - **Point-in-time recovery**: Available through DO dashboard
 - **Manual snapshots**: Can be created on-demand
@@ -791,6 +837,7 @@ df -h
 ### Troubleshooting
 
 **Service won't start:**
+
 ```bash
 # Check service logs
 docker compose logs service-name
@@ -801,6 +848,7 @@ docker compose up --build -d
 ```
 
 **Out of disk space:**
+
 ```bash
 # Clean up Docker
 docker system prune -a -f
@@ -811,6 +859,7 @@ du -sh /var/lib/docker
 ```
 
 **High memory usage:**
+
 ```bash
 # Check container memory usage
 docker stats

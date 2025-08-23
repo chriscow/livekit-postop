@@ -20,4 +20,4 @@ tasks:
   dev:
     interactive: true
     cmds:
-      - 'pnpm dev'
+      - 'pnpm dev:all'

@@ -11,5 +11,5 @@ template: |
 
   Pauses - Before and after the apology to give space for processing the apology.
 
-description: "Sincere voice template for customer service interactions, focusing on empathy and clarity."
-version: "1.0"
+description: 'Sincere voice template for customer service interactions, focusing on empathy and clarity.'
+version: '1.0'

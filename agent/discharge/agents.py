@@ -168,17 +168,20 @@ class DischargeAgent(Agent):
         # )
 
         instructions = """
-You are Maya, an AI voice agent designed to assist in real-time medical conversations between healthcare providers and patients. 
-Your primary role is to listen passively to phone conversations, provide translations when necessary, and offer support to patients and their families after discharge.
+You are Maya, an AI voice agent designed to assist in real-time medical
+conversations between healthcare providers and patients. Your primary role is to
+listen passively to phone conversations, provide translations when necessary,
+and offer support to patients and their families after discharge.
 
-Your responses will be sent to a text-to-speech system so your responses must be conversational, short and only contain
-text that will be read out loud that will sound natural when read out loud.
+Your responses will be sent to a text-to-speech system so your responses must be
+conversational, short and only contain text that will be read out loud that will
+sound natural when read out loud.
 
-As you participate in the conversation, follow these guidelines:
+As you participate in the conversation, follow this structure precisely:
 
-1. Introduce yourself at the beginning of the conversation.
-2. Ask Dr. Shah who is in the room to provide context.
-3. Explain your role briefly and state that you will capture all discharge instructions while listening quietly.
+1. Introduce yourself briefly at the beginning of the conversation.
+2. Ask Dr. Shah who is in the room today.
+3. Explain that you will capture all discharge instructions while listening quietly.
 4. Use the start_passive_listening tool after your introduction.
 5. Remain passive unless directly addressed or asked to translate.
 6. Identify speakers and their language preferences as they join the conversation.
@@ -189,60 +192,64 @@ As you participate in the conversation, follow these guidelines:
 11. Ask the group if you should recap all of the discharge instructions.
 12. If requested, briefly recite the list of instructions.
 
-When you need to respond during the conversation:
-1. Use a friendly and supportive tone.
-2. Provide translations when necessary. .
-4. Briefly explain your role as a virtual assistant that can be contacted after discharge.
+When you need to respond during the conversation: 1. Use a friendly and
+supportive tone. 2. Provide translations when necessary. . 4. Briefly explain
+your role as a virtual assistant that can be contacted after discharge.
 
-To process the conversation and create the discharge summary, conduct your analysis and planning inside the following tags in your thinking block:
+To process the conversation and create the discharge summary, conduct your
+analysis and planning inside the following tags in your thinking block:
 
-<conversation_analysis>
-1. Analyze the conversation:
-   - Who are the participants? List each one and quote a relevant part of their conversation.
+<conversation_analysis> 1. Analyze the conversation:
+   - Who are the participants? List each one and quote a relevant part of their
+     conversation.
    - What languages are being used? Note any translations provided.
    - What key medical information has been discussed? List the main points.
-   - What questions or concerns were raised by the patient or family members? List each one.
-   - Are there any potential language barriers or cultural considerations that might affect understanding?
+   - What questions or concerns were raised by the patient or family members?
+     List each one.
+   - Are there any potential language barriers or cultural considerations that
+     might affect understanding?
 
-2. Review the discharge instructions:
-   - List and number each discharge instruction.
-   - Are there any specific activities mentioned (e.g., restrictions, medications)? Detail each one.
-   - What follow-up care is required? List appointments, tests, or check-ins.
-   - Identify any instructions that might be challenging for the patient to follow and why.
+2. Review the discharge instructions: - List and number each discharge
+   instruction. - Are there any specific activities mentioned (e.g.,
+   restrictions, medications)? Detail each one. - What follow-up care is
+   required? List appointments, tests, or check-ins. - Identify any instructions
+   that might be challenging for the patient to follow and why.
 
-3. Prioritize information for text messages:
-   - Rank the discharge instructions from most to least critical.
-   - Identify which points need immediate attention vs. ongoing care.
-   - Note any instructions that might need extra explanation or emphasis.
+3. Prioritize information for text messages: - Rank the discharge instructions
+   from most to least critical. - Identify which points need immediate attention
+   vs. ongoing care. - Note any instructions that might need extra explanation
+   or emphasis.
 
-4. Plan the text message summary:
-   - How can you condense the key information into clear, concise messages? Write draft versions.
-   - What emojis would be appropriate to use for each main point?
-   - How should you structure the messages for both English and Spanish versions?
-   - Brainstorm at least 3 culturally appropriate phrases or references that could be used.
+4. Plan the text message summary: - How can you condense the key information
+   into clear, concise messages? Write draft versions. - What emojis would be
+   appropriate to use for each main point? - How should you structure the
+   messages for both English and Spanish versions? - Brainstorm at least 3
+   culturally appropriate phrases or references that could be used.
 
-5. Consider ongoing support:
-   - What daily reminders would be most helpful for this patient?
-   - How can you phrase your offer for continued support to encourage engagement?
+5. Consider ongoing support: - What daily reminders would be most helpful for
+   this patient? - How can you phrase your offer for continued support to
+   encourage engagement?
 </conversation_analysis>
 
 After your analysis, create your response in the following format:
 
-<conversation_responses>
-(Include any responses you made during the conversation, using "PostOp:" to indicate when you're speaking)
+<conversation_responses> (Include any responses you made during the
+conversation, using "PostOp:" to indicate when you're speaking)
 </conversation_responses>
 
-<text_messages>
-(Include the series of text messages here, numbered and in both English and Spanish)
-</text_messages>
+<text_messages> (Include the series of text messages here, numbered and in both
+English and Spanish) </text_messages>
 
-Remember to maintain a helpful, friendly, and professional tone throughout your interactions. Your text messages should include:
-1. A friendly introduction reminding the recipient of who you are and your purpose.
-2. Key points from the discharge instructions, including any specific instructions about activities.
-3. Appropriate emojis to make the messages more engaging.
-4. An offer of continued support and mention of daily reminders about important care instructions.
+Remember to maintain a helpful, friendly, and professional tone throughout your
+interactions. Your text messages should include: 1. A friendly introduction
+reminding the recipient of who you are and your purpose. 2. Key points from the
+discharge instructions, including any specific instructions about activities. 3.
+Appropriate emojis to make the messages more engaging. 4. An offer of continued
+support and mention of daily reminders about important care instructions.
 
-Your final output should consist only of the conversation responses and text messages, and should not duplicate or rehash any of the work you did in the thinking block.
+Your final output should consist only of the conversation responses and text
+messages, and should not duplicate or rehash any of the work you did in the
+thinking block.
 """
 
         if is_console_mode():
@@ -326,7 +333,7 @@ Your final output should consist only of the conversation responses and text mes
                     # Store conversation in Redis
                     self._log_conversation_message(session_id, "assistant", response_text)
         
-        await self.session.say("Hi all! I'm Maya, thanks for dialing me in today. So Dr. Shah, who do we have in the room today?")
+        await self.session.say("Hi all! dubba I'm Maya, thanks for dialing me in today. So Dr. Shah, who do we have in the room today?")
         
     async def _logged_say(self, message: str):
         """Wrapper for session.say that logs all outgoing messages"""
@@ -356,6 +363,63 @@ Your final output should consist only of the conversation responses and text mes
         
         return response
 
+    def _should_exit_passive_mode(self, transcript: str) -> bool:
+        """
+        Analyze transcript to determine if agent should exit passive listening mode.
+        
+        Args:
+            transcript: The user's speech transcript
+            
+        Returns:
+            True if agent should exit passive mode, False otherwise
+        """
+        if not transcript:
+            return False
+            
+        # Convert to lowercase for case-insensitive matching
+        text = transcript.lower().strip()
+        
+        # Direct address patterns
+        if "maya" in text:
+            return True
+            
+        # Completion signals
+        completion_phrases = [
+            "finished", "done", "that's all", "we're done", "we're all set",
+            "any questions", "all done", "we're finished", "that's it"
+        ]
+        for phrase in completion_phrases:
+            if phrase in text:
+                return True
+                
+        # Translation requests
+        translation_phrases = [
+            "translate", "what did they say", "can you translate", "translation"
+        ]
+        for phrase in translation_phrases:
+            if phrase in text:
+                return True
+                
+        # Capture verification
+        capture_phrases = [
+            "did you get", "did you capture", "did you hear", "did you catch",
+            "get all that", "capture all", "hear all"
+        ]
+        for phrase in capture_phrases:
+            if phrase in text:
+                return True
+                
+        # Explicit exit instructions
+        exit_phrases = [
+            "exit passive", "stop listening", "exit listening", 
+            "passive mode", "listening mode"
+        ]
+        for phrase in exit_phrases:
+            if phrase in text:
+                return True
+                
+        return False
+
     # Workflow Transition Functions
     @function_tool
     async def start_passive_listening(self, ctx: RunContext[SessionData]):
@@ -381,29 +445,24 @@ Your final output should consist only of the conversation responses and text mes
         
         After exiting, you can return to passive listening if the consultation continues and no further translation is needed."""
         is_passive_mode = getattr(ctx.userdata, 'is_passive_mode', False)
+        session_id = getattr(ctx.userdata, 'session_id', 'unknown')
         print(f"[DEBUG] exit_passive_listening called. is_passive_mode: {is_passive_mode}")
         print(f"[DEBUG] Current transcript buffer size: {len(getattr(self, 'transcript_buffer', []))}")
+        logger.info(f"[WORKFLOW] Session: {session_id} | exit_passive_listening called, is_passive_mode: {is_passive_mode}")
         
         if not is_passive_mode:
+            print(f"[DEBUG] Not in passive mode, returning early")
             return "Not currently in passive listening mode"
             
         ctx.userdata.is_passive_mode = False
         if hasattr(self, '_agent_session') and self._agent_session:
             self._agent_session.input.set_audio_enabled(False)
             
-        # If no transcripts captured, provide a fallback message
-        transcript_buffer = getattr(self, 'transcript_buffer', [])
-        if len(transcript_buffer) == 0:
-            await ctx.session.generate_reply(
-                instructions="The transcript buffer is empty. Say: 'I'm sorry, I didn't capture any discharge instructions during passive listening. Could you please repeat the key points you covered, or would you like me to ask specific questions about the discharge orders?'"
-            )
-            return "No transcripts captured during passive listening"
-        else:
-            # await self.trigger_review(ctx)  # TODO: Implement trigger_review method
-            await ctx.session.generate_reply(
-                instructions="Provide a summary of collected discharge instructions and ask if anything is missing."
-            )
-            return "Exited passive listening mode and provided summary"
+        # Always provide the correct exit response when exiting passive mode
+        await ctx.session.generate_reply(
+            instructions="You have finished collecting discharge instructions in passive listening mode. Say something like: 'Perfect! I've captured the discharge instructions. Let me go over what I heard to make sure I got everything right.' Then provide a brief summary of the key medical points that were discussed during the conversation."
+        )
+        return "Exited passive listening mode and will provide summary"
         
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         """Handle user speech completion - control response based in passive mode"""
@@ -421,18 +480,35 @@ Your final output should consist only of the conversation responses and text mes
             self._log_conversation_message(session_id, "user", transcript_text)
         
         if is_passive_mode:
-            # During passive listening, process the speech but don't generate automatic responses
+            # During passive listening, check if we should exit passive mode
             print(f"[DEBUG] Processing passive transcript: '{transcript_text}'")
-
-            # Check if being directly addressed for translation
-            # if self._is_translation_request(transcript_text):
-            #     print("[DEBUG] Translation request detected, exiting passive mode")
-            #     logger.info(f"[WORKFLOW] Session: {session_id} | Translation request detected, exiting passive mode")
-            #     # Don't raise StopResponse - let the agent respond to the translation request
-            #     # await self._handle_translation_request(turn_ctx, transcript_text)
-            #     return
             
-            # Store instruction silently
+            # Check if transcript indicates we should exit passive mode
+            should_exit = self._should_exit_passive_mode(transcript_text)
+            if should_exit:
+                print(f"[DEBUG] Exit condition detected in transcript: '{transcript_text}'")
+                logger.info(f"[WORKFLOW] Session: {session_id} | Exit condition detected, exiting passive mode")
+                
+                # Call the existing exit_passive_listening function tool
+                try:
+                    # Create a minimal RunContext-like object for the function call
+                    class MinimalRunContext:
+                        def __init__(self, session, userdata):
+                            self.session = session
+                            self.userdata = userdata
+                    
+                    ctx = MinimalRunContext(self.session, self.session.userdata)
+                    await self.exit_passive_listening(ctx)
+                    print(f"[DEBUG] Successfully called exit_passive_listening, now raising StopResponse")
+                    logger.info(f"[WORKFLOW] Session: {session_id} | Exit function completed, stopping further processing")
+                    # Raise StopResponse to prevent additional LLM responses since exit function already generated response
+                    raise StopResponse()
+                    
+                except Exception as e:
+                    logger.error(f"Failed to exit passive listening: {e}")
+                    # Fall through to prevent response if exit failed
+            
+            # Store instruction silently (passive listening continues)
             # await self._store_instruction_silently(transcript_text)
 
             # Prevent automatic response by raising StopResponse

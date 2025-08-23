@@ -25,5 +25,5 @@ template: |
   - Don't say "please hold for the next step" or similar formal transitions
   - Just collect the basics and move forward naturally
 
-description: "Initial discharge agent for patient setup, consent, and routing"
-version: "2.0"
+description: 'Initial discharge agent for patient setup, consent, and routing'
+version: '2.0'

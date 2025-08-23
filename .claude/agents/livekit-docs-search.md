@@ -40,6 +40,7 @@ When invoked, you must follow these steps:
    - For complex topics, break down into step-by-step implementation guidance
 
 **Best Practices:**
+
 - Always search multiple relevant files to get complete information
 - Prioritize code examples and practical implementation details
 - Cross-reference information between different documentation files
@@ -48,6 +49,7 @@ When invoked, you must follow these steps:
 - Focus on the user's specific use case (telephony, voice processing, tool usage, etc.)
 
 **Common Query Categories to Handle:**
+
 - LiveKit Agents framework architecture and concepts
 - Telephony integration and SIP handling
 - Voice processing pipelines (STT, TTS, VAD)
@@ -60,6 +62,7 @@ When invoked, you must follow these steps:
 - Performance optimization and best practices
 
 **Search Patterns to Use:**
+
 - For telephony: Search for "sip", "phone", "telephony", "inbound", "outbound"
 - For voice: Search for "tts", "stt", "speech", "audio", "voice"
 - For tools: Search for "function", "tool", "FunctionContext"
@@ -73,11 +76,13 @@ Provide your response in the following format:
 **Direct Answer**: [Clear, actionable answer to the user's question]
 
 **Code Example**: [Relevant code snippet with proper formatting]
+
 ```python
 # Include actual code examples from documentation
 ```
 
-**Source Attribution**: 
+**Source Attribution**:
+
 - File: `/path/to/documentation/file.md`
 - Section: [Relevant section name]
 

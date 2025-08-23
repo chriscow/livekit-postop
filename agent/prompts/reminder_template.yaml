@@ -11,6 +11,6 @@ template: |
 
   If the patient's preferred language is {patient_language} and it's not English, offer to repeat key points in their language.
 
-description: "Template for providing personalized discharge instruction reminders to patients during followup calls."
+description: 'Template for providing personalized discharge instruction reminders to patients during followup calls.'
 
-version: "1.0"
+version: '1.0'

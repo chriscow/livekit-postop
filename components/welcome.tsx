@@ -32,9 +32,7 @@ export const Welcome = ({
         />
       </svg>
 
-      <p className="text-fg1 max-w-prose pt-1 leading-6 font-medium">
-        Chat with Maya
-      </p>
+      <p className="text-fg1 max-w-prose pt-1 leading-6 font-medium">Chat with Maya</p>
       <Button variant="primary" size="lg" onClick={onStartCall} className="mt-6 w-64 font-mono">
         {startButtonText}
       </Button>

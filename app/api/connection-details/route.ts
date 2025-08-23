@@ -47,9 +47,12 @@ export async function GET() {
       try {
         const existing = await dispatchClient.listDispatch(roomName);
         alreadyDispatched = existing.some((d) => d.agentName === LIVEKIT_AGENT_NAME);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // If the room doesn't exist yet, proceed to create the dispatch (which creates the room)
-        const code = err?.code || err?.metadata || '';
+        const code =
+          (err as { code?: string; metadata?: string })?.code ||
+          (err as { code?: string; metadata?: string })?.metadata ||
+          '';
         if (String(code).toLowerCase().includes('not_found')) {
           alreadyDispatched = false;
         } else {

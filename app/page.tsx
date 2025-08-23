@@ -16,13 +16,13 @@ export default function HomePage() {
         </nav>
       </header>
 
-      <section className="mt-10 rounded-xl bg-gradient-to-br from-primary to-primary-hover px-8 py-12 text-white">
-        <h1 className="text-balance text-4xl font-semibold leading-tight md:text-5xl">
+      <section className="from-primary to-primary-hover mt-10 rounded-xl bg-gradient-to-br px-8 py-12 text-white">
+        <h1 className="text-4xl leading-tight font-semibold text-balance md:text-5xl">
           Automated Patient Follow‑up Calls
         </h1>
-        <p className="mt-4 max-w-2xl text-pretty text-lg/7 opacity-90">
-          Voice‑enabled AI assistant for post‑operative care. Maya listens during discharge, remembers
-          your care plan, and provides personalized reminders and support.
+        <p className="mt-4 max-w-2xl text-lg/7 text-pretty opacity-90">
+          Voice‑enabled AI assistant for post‑operative care. Maya listens during discharge,
+          remembers your care plan, and provides personalized reminders and support.
         </p>
         <div className="mt-6">
           <Button asChild variant="secondary" size="lg" className="font-mono">
@@ -32,30 +32,30 @@ export default function HomePage() {
       </section>
 
       <section id="features" className="mt-12 grid grid-cols-1 gap-6 md:grid-cols-2">
-        <article className="rounded-lg border border-border bg-card p-6 shadow-sm">
+        <article className="border-border bg-card rounded-lg border p-6 shadow-sm">
           <h3 className="text-lg font-semibold">At Discharge</h3>
-          <p className="mt-2 text-sm text-fg1">
+          <p className="text-fg1 mt-2 text-sm">
             Maya listens during your hospital discharge, learning your specific care instructions to
             provide personalized reminders and support.
           </p>
         </article>
-        <article className="rounded-lg border border-border bg-card p-6 shadow-sm">
+        <article className="border-border bg-card rounded-lg border p-6 shadow-sm">
           <h3 className="text-lg font-semibold">Phone Support</h3>
-          <p className="mt-2 text-sm text-fg1">
-            Call Maya anytime with questions about your recovery, or receive scheduled reminder calls to
-            help you follow your care plan.
+          <p className="text-fg1 mt-2 text-sm">
+            Call Maya anytime with questions about your recovery, or receive scheduled reminder
+            calls to help you follow your care plan.
           </p>
         </article>
-        <article className="rounded-lg border border-border bg-card p-6 shadow-sm">
+        <article className="border-border bg-card rounded-lg border p-6 shadow-sm">
           <h3 className="text-lg font-semibold">Medical Guidance</h3>
-          <p className="mt-2 text-sm text-fg1">
-            Maya has access to medical knowledge to answer common post‑operative questions and knows when
-            to connect you with your care team.
+          <p className="text-fg1 mt-2 text-sm">
+            Maya has access to medical knowledge to answer common post‑operative questions and knows
+            when to connect you with your care team.
           </p>
         </article>
-        <article className="rounded-lg border border-border bg-card p-6 shadow-sm">
+        <article className="border-border bg-card rounded-lg border p-6 shadow-sm">
           <h3 className="text-lg font-semibold">Personalized Care</h3>
-          <p className="mt-2 text-sm text-fg1">
+          <p className="text-fg1 mt-2 text-sm">
             Automatic reminders tailored to your procedure and recovery timeline to help you stay on
             track.
           </p>
@@ -63,4 +63,4 @@ export default function HomePage() {
       </section>
     </main>
   );
-} 
+}

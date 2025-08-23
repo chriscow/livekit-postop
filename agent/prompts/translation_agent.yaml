@@ -41,5 +41,5 @@ template: |
   - Confirm understanding when needed
   - Stay focused on accurate translation
 
-description: "Real-time translation agent for non-English speaking patients"
-version: "1.0"
+description: 'Real-time translation agent for non-English speaking patients'
+version: '1.0'

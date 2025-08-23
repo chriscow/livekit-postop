@@ -26,6 +26,6 @@ template: |
   - Be patient and repeat information if requested
   - Never provide medical advice beyond the captured discharge instructions
 
-description: "Main system instructions for the patient followup agent, including call structure and interaction guidelines."
+description: 'Main system instructions for the patient followup agent, including call structure and interaction guidelines.'
 
-version: "1.0"
+version: '1.0'

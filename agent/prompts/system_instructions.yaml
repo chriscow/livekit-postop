@@ -6,7 +6,7 @@ template: |
   by the nurse and remember them on behalf of the patient. The patient has just
   come out of surgery and is not in a state to remember such details and that
   is what you are there for.
-  
+
   The process is started by a nurse who will call you with the patient's phone.
   If the patient is a minor, you will be called with the phone of a parent or guardian.
 
@@ -47,6 +47,6 @@ template: |
 
   Be ready to reference these if the patient has questions, but focus mainly on listening to their experience and concerns.
 
-description: "Main system instructions for the PostOp AI assistant, including communication style, setup process, and phase management."
+description: 'Main system instructions for the PostOp AI assistant, including communication style, setup process, and phase management.'
 
-version: "1.0"
+version: '1.0'

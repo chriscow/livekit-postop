@@ -44,5 +44,5 @@ template: |
   - Confirm understanding at each step
   - Be systematic and methodical
 
-description: "Verification agent that confirms accuracy of collected discharge instructions"
-version: "1.0"
+description: 'Verification agent that confirms accuracy of collected discharge instructions'
+version: '1.0'
