@@ -140,12 +140,16 @@ class SessionData:
     is_passive_mode: bool = False
     collected_instructions: list = None
     room_people: list = None
+    # Tool-captured discharge instructions
+    instructions_map: dict | None = None  # normalized_instruction -> category
     
     def __post_init__(self):
         if self.collected_instructions is None:
             self.collected_instructions = []
         if self.room_people is None:
             self.room_people = []
+        if self.instructions_map is None:
+            self.instructions_map = {}
     
 
 
@@ -159,107 +163,51 @@ class DischargeAgent(Agent):
         Args:
             chat_ctx: Chat context from previous agent (for conversation continuity)
         """
-
-
-        # Load initial discharge agent instructions from YAML
-        # instructions = prompt_manager.load_prompt(
-        #     "discharge_initial",
-        #     agent_name=AGENT_NAME
-        # )
-
-        instructions = """
-You are Maya, an AI voice agent designed to assist in real-time medical
-conversations between healthcare providers and patients. Your primary role is to
-listen passively to phone conversations, provide translations when necessary,
-and offer support to patients and their families after discharge.
-
-Your responses will be sent to a text-to-speech system so your responses must be
-conversational, short and only contain text that will be read out loud that will
-sound natural when read out loud.
-
-As you participate in the conversation, follow this structure precisely:
-
-1. Introduce yourself briefly at the beginning of the conversation.
-2. Ask Dr. Shah who is in the room today.
-3. Explain that you will capture all discharge instructions while listening quietly.
-4. Use the start_passive_listening tool after your introduction.
-5. Remain passive unless directly addressed or asked to translate.
-6. Identify speakers and their language preferences as they join the conversation.
-7. Provide translations only when explicitly requested.
-8. If addressed, assist in answering questions or relay them to the healthcare provider.
-9. Pay close attention to any discharge instructions provided by the healthcare provider.
-10. When the medical professional indicates they are finished, use the exit_passive_listening tool.
-11. Ask the group if you should recap all of the discharge instructions.
-12. If requested, briefly recite the list of instructions.
-
-When you need to respond during the conversation: 1. Use a friendly and
-supportive tone. 2. Provide translations when necessary. . 4. Briefly explain
-your role as a virtual assistant that can be contacted after discharge.
-
-To process the conversation and create the discharge summary, conduct your
-analysis and planning inside the following tags in your thinking block:
-
-<conversation_analysis> 1. Analyze the conversation:
-   - Who are the participants? List each one and quote a relevant part of their
-     conversation.
-   - What languages are being used? Note any translations provided.
-   - What key medical information has been discussed? List the main points.
-   - What questions or concerns were raised by the patient or family members?
-     List each one.
-   - Are there any potential language barriers or cultural considerations that
-     might affect understanding?
-
-2. Review the discharge instructions: - List and number each discharge
-   instruction. - Are there any specific activities mentioned (e.g.,
-   restrictions, medications)? Detail each one. - What follow-up care is
-   required? List appointments, tests, or check-ins. - Identify any instructions
-   that might be challenging for the patient to follow and why.
-
-3. Prioritize information for text messages: - Rank the discharge instructions
-   from most to least critical. - Identify which points need immediate attention
-   vs. ongoing care. - Note any instructions that might need extra explanation
-   or emphasis.
-
-4. Plan the text message summary: - How can you condense the key information
-   into clear, concise messages? Write draft versions. - What emojis would be
-   appropriate to use for each main point? - Brainstorm at least 3
-   culturally appropriate phrases or references that could be used.
-
-5. Consider ongoing support: - What daily reminders would be most helpful for
-   this patient? - How can you phrase your offer for continued support to
-   encourage engagement?
-</conversation_analysis>
-
-After your analysis, create your response in the following format:
-
-<conversation_responses> (Include any responses you made during the
-conversation, using "PostOp:" to indicate when you're speaking)
-</conversation_responses>
-
-<text_messages> (Include the series of text messages here, numbered and in the patient's language) </text_messages>
-
-Remember to maintain a helpful, friendly, and professional tone throughout your
-interactions. Your text messages should include: 1. A friendly introduction
-reminding the recipient of who you are and your purpose. 2. Key points from the
-discharge instructions, including any specific instructions about activities. 3.
-Appropriate emojis to make the messages more engaging. 4. An offer of continued
-support and mention of daily reminders about important care instructions.
-
-Your final output should consist only of the conversation responses and text
-messages, and should not duplicate or rehash any of the work you did in the
-thinking block.
-"""
+        # Load initial discharge agent instructions from YAML (currently simplified inline)
+        instructions = (
+            "You are Maya, an AI discharge assistant.\n"
+            "GOAL: Capture ONLY true discharge instructions while in passive mode; ignore filler.\n\n"
+            "Passive protocol:\n"
+            "1. Brief intro, ask who is present, then call start_passive_listening.\n"
+            "2. While passive: speak ONLY if directly addressed, asked to translate, or completion/verification is requested.\n"
+            "3. Silently capture instructions.\n\n"
+            "Capture IF the utterance conveys actionable medical guidance (examples):\n"
+            "- Medication: name, dose, frequency, route, duration (\"Take two Tylenol every four hours for pain\")\n"
+            "- Activity / mobility restrictions (\"No heavy lifting for two weeks\")\n"
+            "- Wound or incision care (cleaning, dressing, showering guidance)\n"
+            "- Diet / hydration requirements\n"
+            "- Follow-up appointments or scheduling tasks\n"
+            "- Warning signs / when to call doctor / ER triggers\n"
+            "- Device usage or care (brace, sling, ice, compression, drains)\n"
+            "- Explicit precautions (bathing, driving, sexual activity, smoking, alcohol)\n\n"
+            "IGNORE (do NOT capture): greetings, acknowledgements, thanks, names/vocatives alone, chit-chat, encouragement, partial fragments without actionable content, standalone patient name, or single-word responses.\n\n"
+            "On exit (triggered by name or completion phrase):\n"
+            "1. Provide concise bullet list of ONLY captured instructions (merged into complete lines; no filler numbers if none captured).\n"
+            "2. Ask once if anything is missing or needs correction (<= 1 short sentence).\n"
+            "3. Do NOT say you will now listen quietly again.\n\n"
+            "If answering a direct question (outside passive): concise (<=2 sentences), medically accurate.\n"
+            "Never invent an instruction; if uncertain, ask for clarification instead of guessing.\n\n"
+            "CRITICAL PASSIVE MODE RULES:\n"
+            "While passive you MUST remain silent. For each user/nurse utterance:\n"
+            "* If it contains a discharge instruction, call the function tool collect_instruction with:\n"
+            "    instruction_text: full clear sentence (add dose, frequency, duration if stated)\n"
+            "    instruction_type: one of medication | activity | wound | diet | followup | warning | device | precaution | other (default 'general' if unclear)\n"
+            "* If it is NOT an instruction (greeting, acknowledgement, chit‑chat, vocative, pleasantry, partial fragment without action) DO NOTHING (no text, no tool call).\n"
+            "* Never repeat or paraphrase instructions aloud while still in passive mode.\n\n"
+            "You ONLY speak when:\n"
+            "1. Directly addressed by name with a question.\n"
+            "2. A translation is explicitly requested.\n"
+            "3. Exiting passive mode to summarize collected instructions."
+        )
 
         if is_console_mode():
             tts = openai.TTS(voice="shimmer")
         else:
-            # Use Hume for production
             tts = hume.TTS(
                 voice=hume.VoiceById(id=POSTOP_VOICE_ID),
                 description="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother."
             )
-            
-        # Initialize agent with services
+
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
@@ -268,17 +216,14 @@ thinking block.
             tts=tts,
             vad=silero.VAD.load()
         )
-        
-        # Agent state (Redis memory for persistence)
+
         self.memory = RedisMemory()
-        
-        # Redis client for conversation logging
+
         import redis
         import os
         redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
-        
-        # Override session.say to log all outgoing messages
+
         self._original_say = None
         self._original_generate_reply = None
         
@@ -376,9 +321,12 @@ thinking block.
             
         # Convert to lowercase for case-insensitive matching
         text = transcript.lower().strip()
+        # Detailed debug logging of evaluation
+        logger.debug(f"[PASSIVE CHECK] Evaluating transcript for exit: '{text}'")
         
         # Direct address patterns
         if "maya" in text:
+            logger.debug("[PASSIVE CHECK] Matched direct address: 'maya'")
             return True
             
         # Completion signals
@@ -388,6 +336,7 @@ thinking block.
         ]
         for phrase in completion_phrases:
             if phrase in text:
+                logger.debug(f"[PASSIVE CHECK] Matched completion phrase: '{phrase}'")
                 return True
                 
         # Translation requests
@@ -396,6 +345,7 @@ thinking block.
         ]
         for phrase in translation_phrases:
             if phrase in text:
+                logger.debug(f"[PASSIVE CHECK] Matched translation phrase: '{phrase}'")
                 return True
                 
         # Capture verification
@@ -405,6 +355,7 @@ thinking block.
         ]
         for phrase in capture_phrases:
             if phrase in text:
+                logger.debug(f"[PASSIVE CHECK] Matched capture verification phrase: '{phrase}'")
                 return True
                 
         # Explicit exit instructions
@@ -414,9 +365,38 @@ thinking block.
         ]
         for phrase in exit_phrases:
             if phrase in text:
+                logger.debug(f"[PASSIVE CHECK] Matched explicit exit phrase: '{phrase}'")
                 return True
                 
+        logger.debug("[PASSIVE CHECK] No exit trigger matched for transcript")
         return False
+
+    # Instruction Collection Functions (from PassiveListeningAgent)
+    @function_tool
+    async def collect_instruction(self, ctx: RunContext[SessionData], instruction_text: str, instruction_type: str = "general"):
+        """
+        Collect a discharge instruction being read aloud
+        
+        Args:
+            instruction_text: The instruction being given
+            instruction_type: Type of instruction (medication, activity, followup, warning, etc.)
+        """
+        from datetime import datetime
+        instruction = {
+            "text": instruction_text,
+            "type": instruction_type,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        ctx.userdata.collected_instructions.append(instruction)
+        logger.info(f"Collected instruction: {instruction_type} - {instruction_text[:50]}...")
+        
+        # Stay silent in passive mode unless directly asked
+        if ctx.userdata.workflow_mode == "passive_listening" and ctx.userdata.is_passive_mode:
+            return None, None  # Silent collection
+        else:
+            return None, "I've noted that instruction."
+
 
     # Workflow Transition Functions
     @function_tool
@@ -453,14 +433,60 @@ thinking block.
             return "Not currently in passive listening mode"
             
         ctx.userdata.is_passive_mode = False
-        if hasattr(self, '_agent_session') and self._agent_session:
-            self._agent_session.input.set_audio_enabled(False)
-            
-        # Always provide the correct exit response when exiting passive mode
-        await ctx.session.generate_reply(
-            instructions="You have finished collecting discharge instructions in passive listening mode. Say something like: 'Perfect! I've captured the discharge instructions. Let me go over what I heard to make sure I got everything right.' Then provide a brief summary of the key medical points that were discussed during the conversation."
-        )
-        return "Exited passive listening mode and will provide summary"
+        # NOTE: Do NOT disable audio input here; doing so was causing the session to terminate early.
+        # if hasattr(self, '_agent_session') and self._agent_session:
+        #     self._agent_session.input.set_audio_enabled(False)
+        logger.info(f"[WORKFLOW] Session: {session_id} | Passive mode flag cleared")
+        
+        # Build a deterministic summary instead of relying entirely on LLM to avoid re-enter style responses
+        raw_list = ctx.userdata.collected_instructions if hasattr(ctx.userdata, 'collected_instructions') else []
+        # Normalize to list of (text, type)
+        normalized: list[tuple[str,str]] = []
+        for item in raw_list:
+            if not item:
+                continue
+            if isinstance(item, dict):
+                text = item.get("text", "").strip()
+                itype = item.get("type", "general")
+            else:
+                text = str(item).strip()
+                itype = "general"
+            if text:
+                normalized.append((text, itype))
+        # De-duplicate by lowercase text preserving order
+        seen = set()
+        dedup: list[tuple[str,str]] = []
+        for text, itype in normalized:
+            key = text.lower()
+            if key not in seen:
+                seen.add(key)
+                dedup.append((text, itype))
+        logger.debug(f"[WORKFLOW] Session: {session_id} | Instruction count (unique): {len(dedup)}")
+        bullet_lines = [f"{idx}. ({itype}) {text}" for idx, (text, itype) in enumerate(dedup, start=1)]
+        summary_block = "\n".join(bullet_lines) if bullet_lines else "(No discharge instructions were detected.)"
+        summary_intro = "Here are the discharge instructions I captured:" if bullet_lines else "I didn't confidently hear any explicit discharge instructions." 
+        deterministic_reply = f"{summary_intro}\n{summary_block}\nLet me know if something should be added or corrected."
+        # Log deterministic reply content
+        logger.debug(f"[WORKFLOW] Session: {session_id} | Deterministic exit summary prepared")
+        
+        # Send deterministic summary first to avoid LLM drifting back into passive intro
+        await ctx.session.say(deterministic_reply)
+        
+        # Optionally ask LLM for refinement ONLY if we have at least one instruction
+        if dedup:
+            try:
+                await ctx.session.generate_reply(
+                    instructions=(
+                        "You just provided a deterministic bullet list summary of discharge instructions. "
+                        "Now, briefly (<= 2 short sentences) ask if they'd like any clarification or if anything was missed. "
+                        "Do NOT say you will listen quietly again. Do NOT restate you are starting passive mode."
+                    )
+                )
+            except Exception as e:
+                logger.error(f"[WORKFLOW] Session: {session_id} | Optional refinement failed: {e}")
+        return "Exited passive listening mode and provided summary"
+
+    # Removed record_discharge_instruction in favor of collect_instruction
         
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         """Handle user speech completion - control response based in passive mode"""
@@ -483,33 +509,30 @@ thinking block.
             
             # Check if transcript indicates we should exit passive mode
             should_exit = self._should_exit_passive_mode(transcript_text)
+            logger.debug(f"[PASSIVE STATE] should_exit={should_exit} | current_passive={is_passive_mode}")
             if should_exit:
-                print(f"[DEBUG] Exit condition detected in transcript: '{transcript_text}'")
-                logger.info(f"[WORKFLOW] Session: {session_id} | Exit condition detected, exiting passive mode")
-                
-                # Call the existing exit_passive_listening function tool
-                try:
+                # Prevent duplicate exit attempts
+                if not getattr(self.session.userdata, '_exiting_passive', False):
+                    self.session.userdata._exiting_passive = True
+                    print(f"[DEBUG] Exit condition detected in transcript: '{transcript_text}'")
+                    logger.info(f"[WORKFLOW] Session: {session_id} | Exit condition detected, exiting passive mode")
                     # Create a minimal RunContext-like object for the function call
                     class MinimalRunContext:
                         def __init__(self, session, userdata):
                             self.session = session
                             self.userdata = userdata
-                    
                     ctx = MinimalRunContext(self.session, self.session.userdata)
                     await self.exit_passive_listening(ctx)
                     print(f"[DEBUG] Successfully called exit_passive_listening, now raising StopResponse")
                     logger.info(f"[WORKFLOW] Session: {session_id} | Exit function completed, stopping further processing")
-                    # Raise StopResponse to prevent additional LLM responses since exit function already generated response
+                    # Clear passive exit flag AFTER successful state change
+                    self.session.userdata._exiting_passive = False
                     raise StopResponse()
-                    
-                except Exception as e:
-                    logger.error(f"Failed to exit passive listening: {e}")
-                    # Fall through to prevent response if exit failed
+                else:
+                    logger.debug(f"[PASSIVE STATE] Exit already in progress, ignoring additional trigger: '{transcript_text}'")
+                    raise StopResponse()
             
-            # Store instruction silently (passive listening continues)
-            # await self._store_instruction_silently(transcript_text)
 
-            # Prevent automatic response by raising StopResponse
             raise StopResponse()
 
         # Normal mode - let the agent respond automatically
