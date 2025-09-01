@@ -5,9 +5,10 @@ This comprehensive testing suite evaluates your discharge agent's passive listen
 ## 🎯 What It Tests
 
 ### Exhaustive Scenarios (500+ test cases):
-- **Stop word variations**: 20+ "Maya" address variants  
+
+- **Stop word variations**: 20+ "Maya" address variants
 - **Completion phrases**: 20+ "that's all", "any questions", etc.
-- **Social closings**: 18+ "good luck", "take care", etc.  
+- **Social closings**: 18+ "good luck", "take care", etc.
 - **Verification requests**: 15+ "did you get that", etc.
 - **Complex multi-instruction scenarios**: 1-15 instructions per conversation
 - **Edge cases**: False positives, incomplete conversations
@@ -15,6 +16,7 @@ This comprehensive testing suite evaluates your discharge agent's passive listen
 - **Multi-modal combinations**: Multiple exit signals in one conversation
 
 ### Real Agent Testing:
+
 - Uses your actual `DischargeAgent` implementation
 - Tests real `on_user_turn_completed` method
 - Validates actual `_tts_suppressed` flag behavior
@@ -56,7 +58,7 @@ uv run python tools/automated_passive_mode_eval.py
 ================================================================================
 This will exhaustively test your passive mode implementation across:
 • Stop word variations (20+ variants)
-• Completion phrases (20+ phrases)  
+• Completion phrases (20+ phrases)
 • Social closings (18+ closings)
 • Verification requests (15+ requests)
 • Complex multi-instruction scenarios
@@ -134,40 +136,48 @@ This will exhaustively test your passive mode implementation across:
 ## 📋 Test Categories Explained
 
 ### Stop Word Tests (`stop_*`)
+
 - Direct "Maya" addressing in various contexts
 - Tests case sensitivity and context awareness
 - **Expected behavior**: Should always trigger exit
 
 ### Completion Phrase Tests (`completion_*`)
+
 - "That's all", "Any questions?", "We're done"
 - Tests natural conversation ending detection
 - **Expected behavior**: Should trigger exit after instructions
 
-### Social Closing Tests (`social_*`) 
+### Social Closing Tests (`social_*`)
+
 - "Good luck", "Take care", "Feel better"
 - Tests emotional/social conversation endings
 - **Expected behavior**: Should trigger exit (medium confidence)
 
 ### Verification Tests (`verify_*`)
+
 - "Did you get that?", "Can you repeat?"
 - Tests requests for confirmation/summary
 - **Expected behavior**: Should trigger exit for summary
 
 ### Complex Tests (`complex_*`)
+
 - 1-15 instructions + various exit signals
 - Tests real-world conversation complexity
 - **Expected behavior**: Collect all instructions, then exit
 
 ### False Positive Tests (`false_pos_*`)
+
 - Greetings, incomplete conversations, casual mentions
 - **Expected behavior**: Should NOT trigger exit
 
 ### Early Exit Tests (`early_exit_*`)
+
 - Exit signals very early in conversation
 - Tests timing sensitivity
 - **Expected behavior**: Exit immediately when addressed
 
 ### Combination Tests (`combo_*`)
+
 - Multiple exit signals in sequence
 - Tests which signal takes precedence
 - **Expected behavior**: Exit on first valid signal
@@ -186,7 +196,7 @@ additional_stop_words = [
     "AI, can you help?"
 ]
 
-# Add to _generate_completion_phrases()  
+# Add to _generate_completion_phrases()
 additional_completions = [
     "I think we covered everything",
     "That should do it",
@@ -225,6 +235,7 @@ TestCase(
 ### Detailed Report (`passive_mode_comprehensive_evaluation_*.json`)
 
 Contains complete test results:
+
 - Individual test case results
 - Conversation logs for each test
 - Timing data
@@ -232,6 +243,7 @@ Contains complete test results:
 - Category breakdowns
 
 ### Key Fields:
+
 ```json
 {
   "summary": {
@@ -260,34 +272,40 @@ Contains complete test results:
 ### Environment Issues
 
 **Error**: `No module named 'livekit'`
+
 - **Solution**: Run in LiveKit environment or use `uv run`
 
-**Error**: `No module named 'agent.discharge.agents'`  
+**Error**: `No module named 'agent.discharge.agents'`
+
 - **Solution**: Ensure PYTHONPATH includes project root
 
 ### Import Errors
 
 **Error**: `Failed to import required components`
+
 - **Solution**: Check that all LiveKit dependencies are installed
 - Try: `pip install livekit livekit-agents livekit-plugins-openai`
 
 ### Agent Initialization
 
 **Error**: `Failed to initialize real agent session`
+
 - **Solution**: Check that `DischargeAgent` can be instantiated
 - Verify no missing configuration or API keys
 
 ### Performance Issues
 
 **Issue**: Tests running slowly
+
 - **Solution**: Reduce test case count in `_generate_*` methods
 - Focus on specific categories: `python run_passive_mode_eval.py --category stop`
 
 ## 🎯 Interpreting Results
 
 ### Pass Rate Guidelines:
+
 - **90-100%**: Excellent - production ready
-- **80-89%**: Good - minor tuning needed  
+- **80-89%**: Good - minor tuning needed
 - **70-79%**: Fair - some improvements required
 - **60-69%**: Needs work - significant issues
 - **<60%**: Poor - major problems
@@ -296,14 +314,13 @@ Contains complete test results:
 
 1. **"Expected exit at turn X, got Y"**: Timing sensitivity
    - **Fix**: Adjust `_should_exit_passive_mode` logic
-   
 2. **"Unexpected exit at turn X"**: False positive
    - **Fix**: Make exit detection more specific
-   
-3. **"Expected exit at turn X, got -1"**: Missed exit signal  
+3. **"Expected exit at turn X, got -1"**: Missed exit signal
    - **Fix**: Add missing phrases to detection logic
 
 ### Performance Metrics:
+
 - **Test time <100ms**: Excellent responsiveness
 - **Test time 100-500ms**: Good performance
 - **Test time >500ms**: May need optimization

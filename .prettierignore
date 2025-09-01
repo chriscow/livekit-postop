@@ -4,6 +4,7 @@ node_modules/
 pnpm-lock.yaml
 .next/
 .env*
+.claude/
 
 
 
