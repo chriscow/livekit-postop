@@ -607,25 +607,69 @@ class DischargeAgent(Agent):
             "reasoning": ""
         }
         
-        # Check for completion phrases
-        completion_signals = ["that's all", "that's everything", "any questions", "we're done", 
-                            "we're finished", "that covers it", "finished", "done", "complete"]
+        # Check for completion phrases - Hypothesis 2 expansion
+        completion_signals = [
+            # Original high-confidence signals  
+            "that's all", "that's everything", "any questions", "we're done", "we're finished", 
+            "that covers it", "finished", "done", "complete",
+            
+            # Hypothesis 2: New informal completion patterns
+            "covers everything", "that covers everything", "alright, that covers everything",
+            "should be everything", "that should be everything you need", "that should be everything",
+            "wraps up", "that wraps up", "wraps up the", 
+            "concludes", "that concludes", "concludes our",
+            "nothing else to add", "nothing else", "nothing more to add",
+            "i believe that's everything", "believe that's everything", "i think that's everything",
+        ]
+        
+        # Check for partial completion exclusions (should NOT trigger exit)
+        partial_completion_exclusions = [
+            "done with this particular", "finished with this particular", 
+            "almost finished", "almost done", "we're almost",
+            "about the medication", "about this medication", "questions about",
+        ]
+        
+        # Apply completion signal detection with exclusion logic
         for signal in completion_signals:
             if signal in message_lower:
-                analysis["completion_phrases"].append(signal)
-                analysis["confidence"] = max(analysis["confidence"], 0.9)
+                # Check if this is actually a partial completion that should be excluded
+                is_partial = False
+                for exclusion in partial_completion_exclusions:
+                    if exclusion in message_lower:
+                        is_partial = True
+                        break
+                
+                if not is_partial:
+                    analysis["completion_phrases"].append(signal)
+                    analysis["confidence"] = max(analysis["confidence"], 0.9)
         
-        # Check for social closings
-        social_signals = ["good luck", "take care", "feel better", "have a good day", 
-                        "see you later", "get well", "rest well", "be safe"]
+        # Check for social closings - Hypothesis 2 expansion
+        social_signals = [
+            # Original signals
+            "good luck", "take care", "feel better", "have a good day", 
+            "see you later", "get well", "rest well", "be safe",
+            
+            # Hypothesis 2: New social closing patterns
+            "take it easy", "take it easy and", "get some rest", "and get some rest",
+            "wishing you", "wishing you a speedy recovery", "speedy recovery", 
+            "have a great day", "heal well", "and heal well",
+        ]
         for signal in social_signals:
             if signal in message_lower:
                 analysis["social_closings"].append(signal)
                 analysis["confidence"] = max(analysis["confidence"], 0.7)
         
-        # Check for verification requests
-        verification_signals = ["did you get", "did you capture", "can you repeat", 
-                              "what did you hear", "did you understand"]
+        # Check for verification requests - Hypothesis 2 expansion
+        verification_signals = [
+            # Original high-confidence verification patterns
+            "did you get", "did you capture", "can you repeat", 
+            "what did you hear", "did you understand",
+            
+            # Hypothesis 2: New verification patterns from false negatives
+            "were you able to", "were you able to record", "able to record everything",
+            "do you have all", "do you have all of that", "have all of that",
+            "are you following", "are you following along", "following along okay",
+        ]
         for signal in verification_signals:
             if signal in message_lower:
                 analysis["verification_requests"].append(signal)
