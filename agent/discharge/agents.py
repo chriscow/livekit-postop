@@ -522,7 +522,62 @@ class DischargeAgent(Agent):
                 logger.error(f"[WORKFLOW] Session: {session_id} | Optional refinement failed: {e}")
         return "Exited passive listening mode and provided summary"
 
-    @function_tool() 
+    def _is_maya_directly_addressed(self, message_lower: str) -> bool:
+        """
+        Hypothesis 1: Maya Context Discrimination
+        
+        Determine if Maya is being directly addressed vs just mentioned in conversation.
+        Direct address patterns should trigger exit, contextual mentions should not.
+        
+        DIRECT ADDRESS (should EXIT):
+        - "Maya, [anything]" 
+        - "Hey Maya"
+        - "[anything], Maya"
+        - "Did you [verb] that, Maya?"
+        
+        CONTEXTUAL MENTION (should CONTINUE):
+        - "Maya is our coordinator"
+        - "ask Maya about this"
+        - "Maya mentioned earlier"
+        """
+        
+        import re
+        
+        # Direct address patterns - check contextual patterns FIRST
+        # If contextual pattern matches, don't check direct patterns
+        
+        # First check contextual mention patterns (should NOT trigger)
+        contextual_patterns = [
+            r'ask maya\b',           # "ask maya about"
+            r'maya is\b',            # "maya is our coordinator"
+            r'maya mentioned\b',     # "maya mentioned earlier"  
+            r'maya said\b',          # "maya said something"
+            r'maya told\b',          # "maya told us"
+            r'\bmaya is our\b',      # "maya is our coordinator" - more specific
+        ]
+        
+        # If contextual pattern matches, return False immediately
+        for pattern in contextual_patterns:
+            if re.search(pattern, message_lower):
+                return False
+        
+        # Only then check direct address patterns
+        direct_patterns = [
+            r'^maya[,\s]',           # "maya, did you get that"
+            r'^hey maya\b',          # "hey maya"
+            r'^maya\s*-',            # "maya - did you understand"  
+            r',\s*maya[^a-z]',       # "did you get that, maya?"
+            r'\bmaya[,\?!]',         # "maya?" or "maya!"
+        ]
+        
+        # Check if any direct address pattern matches
+        for pattern in direct_patterns:
+            if re.search(pattern, message_lower):
+                return True
+        
+        # Default: if "maya" appears but no clear pattern, be conservative (don't trigger)
+        return False
+
     async def analyze_exit_signal(self, ctx: RunContext, user_message: str):
         """
         Chain of Thought: Analyze if the user message signals completion of discharge instructions.
@@ -543,7 +598,7 @@ class DischargeAgent(Agent):
         # Chain of thought analysis
         analysis = {
             "message": user_message,
-            "contains_maya": "maya" in message_lower,
+            "contains_maya": self._is_maya_directly_addressed(message_lower),
             "completion_phrases": [],
             "social_closings": [],
             "verification_requests": [],
