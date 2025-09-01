@@ -1,0 +1,11 @@
+# Claude Code configuration directory
+.claude/
+
+# Other common ignores
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.git/
+dist/
+build/
