@@ -1,0 +1,103 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=UserPromptSubmit python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+          }
+        ]
+      }
+    ],
+    // "PreToolUse": [
+    //   {
+    //     "matcher": "*",
+    //     "hooks": [
+    //       {
+    //         "type": "command",
+    //         "command": "CLAUDE_HOOK_TYPE=PreToolUse python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+    //       }
+    //     ]
+    //   }
+    // ],
+    // "PostToolUse": [
+    //   {
+    //     "matcher": "*",
+    //     "hooks": [
+    //       {
+    //         "type": "command",
+    //         "command": "CLAUDE_HOOK_TYPE=PostToolUse python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+    //       }
+    //     ]
+    //   }
+    // ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=Stop python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SubagentStop python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=Notification python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SessionStart python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SessionEnd python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PreCompact python3 $CLAUDE_PROJECT_DIR/.claude/audit-logger.py"
+          }
+        ]
+      }
+    ]
+  }
+}
