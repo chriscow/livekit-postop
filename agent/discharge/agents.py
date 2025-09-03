@@ -522,6 +522,61 @@ class DischargeAgent(Agent):
                 logger.error(f"[WORKFLOW] Session: {session_id} | Optional refinement failed: {e}")
         return "Exited passive listening mode and provided summary"
 
+    async def _exit_passive_mode_and_summarize(self):
+        """
+        Direct method to exit passive mode and provide instruction summary.
+        This bypasses the function_tool wrapper for direct programmatic calls.
+        """
+        session_id = getattr(self.session.userdata, 'session_id', 'unknown')
+        logger.info(f"[WORKFLOW] Session: {session_id} | Exiting passive mode and providing summary")
+        
+        # Build a deterministic summary instead of relying entirely on LLM to avoid re-enter style responses
+        raw_list = self.session.userdata.collected_instructions if hasattr(self.session.userdata, 'collected_instructions') else []
+        # Normalize to list of (text, type)
+        normalized: list[tuple[str,str]] = []
+        for item in raw_list:
+            if not item:
+                continue
+            if isinstance(item, dict):
+                text = item.get("text", "").strip()
+                itype = item.get("type", "general")
+            else:
+                text = str(item).strip()
+                itype = "general"
+            if text:
+                normalized.append((text, itype))
+        # De-duplicate by lowercase text preserving order
+        seen = set()
+        dedup: list[tuple[str,str]] = []
+        for text, itype in normalized:
+            key = text.lower()
+            if key not in seen:
+                seen.add(key)
+                dedup.append((text, itype))
+        logger.debug(f"[WORKFLOW] Session: {session_id} | Instruction count (unique): {len(dedup)}")
+        bullet_lines = [f"{idx}. ({itype}) {text}" for idx, (text, itype) in enumerate(dedup, start=1)]
+        summary_block = "\n".join(bullet_lines) if bullet_lines else "(No discharge instructions were detected.)"
+        summary_intro = "Here are the discharge instructions I captured:" if bullet_lines else "I didn't confidently hear any explicit discharge instructions." 
+        deterministic_reply = f"{summary_intro}\n{summary_block}\nLet me know if something should be added or corrected."
+        # Log deterministic reply content
+        logger.debug(f"[WORKFLOW] Session: {session_id} | Deterministic exit summary prepared")
+        
+        # Send deterministic summary first to avoid LLM drifting back into passive intro
+        await self.session.say(deterministic_reply)
+        
+        # Optionally ask LLM for refinement ONLY if we have at least one instruction
+        if dedup:
+            try:
+                await self.session.generate_reply(
+                    instructions=(
+                        "You just provided a deterministic bullet list summary of discharge instructions. "
+                        "Now, briefly (<= 2 short sentences) ask if they'd like any clarification or if anything was missed. "
+                        "Do NOT say you will listen quietly again. Do NOT restate you are starting passive mode."
+                    )
+                )
+            except Exception as e:
+                logger.error(f"[WORKFLOW] Session: {session_id} | Optional refinement failed: {e}")
+
     def _is_maya_directly_addressed(self, message_lower: str) -> bool:
         """
         Hypothesis 1: Maya Context Discrimination
@@ -699,7 +754,7 @@ class DischargeAgent(Agent):
     # Removed record_discharge_instruction in favor of collect_instruction
         
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
-        """Handle user speech completion with TTS suppression during passive mode"""
+        """Handle user speech completion with exit detection and TTS suppression during passive mode"""
         # Get passive mode status from session userdata
         is_passive_mode = getattr(self.session.userdata, 'is_passive_mode', False)
         session_id = getattr(self.session.userdata, 'session_id', 'unknown')
@@ -714,11 +769,23 @@ class DischargeAgent(Agent):
             self._log_conversation_message(session_id, "user", transcript_text)
         
         if is_passive_mode:
-            # During passive mode, suppress TTS but allow LLM processing and tool calls
-            # The LLM will decide when to exit using provide_instruction_summary function tool
-            self._tts_suppressed = True
-            logger.debug(f"[PASSIVE STATE] Session: {session_id} | Passive mode - TTS suppressed, LLM processing enabled")
-            print(f"[DEBUG] Passive mode: '{transcript_text}' - LLM will analyze and decide on exit")
+            # FIXED: Explicit exit detection before processing
+            if transcript_text.strip() and self._should_exit_passive_mode(transcript_text):
+                logger.info(f"[EXIT DETECTION] Session: {session_id} | Exit signal detected: '{transcript_text[:50]}...'")
+                print(f"[EXIT DETECTION] Passive mode exit triggered by: '{transcript_text}'")
+                
+                # Exit passive mode immediately
+                self.session.userdata.is_passive_mode = False
+                self._tts_suppressed = False  # Re-enable TTS for exit response
+                
+                # Call the summary logic directly (bypass function_tool wrapper)
+                await self._exit_passive_mode_and_summarize()
+                return  # Stop further processing since we've exited
+            else:
+                # Continue passive mode - suppress TTS but allow LLM processing
+                self._tts_suppressed = True
+                logger.debug(f"[PASSIVE STATE] Session: {session_id} | Continuing passive mode - TTS suppressed")
+                print(f"[DEBUG] Passive mode continues: '{transcript_text}' - LLM will process silently")
         else:
             # Normal mode - enable TTS
             self._tts_suppressed = False
