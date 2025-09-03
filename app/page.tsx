@@ -7,9 +7,9 @@ export default function HomePage() {
       <header className="flex items-center justify-between py-2">
         <div className="text-xl font-semibold tracking-tight">PostOp AI</div>
         <nav className="flex items-center gap-4">
-          {/* <Link href="#features" className="text-sm underline">
-            Features
-          </Link> */}
+          <Link href="/conversations" className="text-sm underline">
+            View Conversations
+          </Link>
           <Button asChild variant="primary" size="sm" className="font-mono">
             <Link href="/app">Chat with Maya</Link>
           </Button>
