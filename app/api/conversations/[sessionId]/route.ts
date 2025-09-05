@@ -31,10 +31,10 @@ export type ConversationDetails = {
 
 export async function GET(
   request: Request,
-  { params }: { params: { sessionId: string } }
+  { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
-    const { sessionId } = params;
+    const { sessionId } = await params;
     const redis = await getRedisClient();
     
     // Get all messages for this conversation
@@ -58,13 +58,13 @@ export async function GET(
             role: parsed.role,
             message: parsed.message,
             formattedTime: new Date(parsed.timestamp * 1000).toLocaleString(),
-          };
+          } as ConversationMessage;
         } catch {
           return null;
         }
       })
-      .filter(Boolean)
-      .sort((a, b) => a.timestamp - b.timestamp);
+      .filter((msg: ConversationMessage | null): msg is ConversationMessage => msg !== null)
+      .sort((a: ConversationMessage, b: ConversationMessage) => a.timestamp - b.timestamp);
     
     if (parsedMessages.length === 0) {
       return NextResponse.json(

@@ -23,16 +23,20 @@ type ConversationDetails = {
 export default function ConversationDetailPage({
   params,
 }: {
-  params: { sessionId: string };
+  params: Promise<{ sessionId: string }>;
 }) {
   const [conversation, setConversation] = useState<ConversationDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string>('');
 
   useEffect(() => {
     async function fetchConversation() {
       try {
-        const response = await fetch(`/api/conversations/${params.sessionId}`);
+        const resolvedParams = await params;
+        const sessionIdValue = resolvedParams.sessionId;
+        setSessionId(sessionIdValue);
+        const response = await fetch(`/api/conversations/${sessionIdValue}`);
         if (!response.ok) {
           if (response.status === 404) {
             throw new Error('Conversation not found');
@@ -49,7 +53,7 @@ export default function ConversationDetailPage({
     }
 
     fetchConversation();
-  }, [params.sessionId]);
+  }, [params]);
 
   const formatDuration = (duration: number) => {
     const minutes = Math.floor(duration / 60);
