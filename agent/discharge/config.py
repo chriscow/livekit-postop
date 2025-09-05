@@ -2,6 +2,19 @@
 Configuration constants for the PostOp AI system
 """
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+# Look for .env in the agent directory (parent of this discharge directory)
+current_file_dir = os.path.dirname(__file__)  # discharge/
+agent_dir = os.path.dirname(current_file_dir)  # agent/
+dotenv_path = os.path.join(agent_dir, '.env')
+env_loaded = load_dotenv(dotenv_path)
+
+# Debug logging for environment loading
+import logging
+logger = logging.getLogger("postop-agent")
+logger.info(f"Environment loading: .env path={dotenv_path}, exists={os.path.exists(dotenv_path)}, loaded={env_loaded}")
 
 # Agent Configuration  
 AGENT_DISPLAY_NAME = os.getenv("AGENT_NAME", "Vince")  # What the agent calls itself
@@ -24,3 +37,4 @@ CONSOLE_TEST_PHONE = "(425) 829-5443"  # Hardcoded phone for console testing
 
 # Redis Configuration
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
+logger.info(f"Redis URL configured: {REDIS_URL[:50]}..." if REDIS_URL.startswith('redis://') else f"Redis URL: {REDIS_URL}")

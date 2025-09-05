@@ -21,7 +21,8 @@ from .discharge_orders import (
 # This function only runs when someone actually tries to use an agent class
 def _lazy_import_agents():
     """Import all agent classes when first needed to avoid heavy dependencies at package load time"""
-    from .agents import ConsentCollector, DischargeAgent
+    from .consent_collector import ConsentCollector
+    from .agents import DischargeAgent
     return ConsentCollector, DischargeAgent
 
 # Initialize agent class variables as None - they'll be populated when first accessed
