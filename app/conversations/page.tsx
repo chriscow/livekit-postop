@@ -72,7 +72,7 @@ export default function ConversationsPage() {
 
   return (
     <main className="mx-auto flex min-h-svh w-full max-w-6xl flex-col px-6 py-10">
-      <header className="flex items-center justify-between py-2 mb-8">
+      <header className="mb-8 flex items-center justify-between py-2">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Conversations</h1>
           <p className="text-fg1 mt-2">View all Maya conversations from discharge calls</p>
@@ -89,9 +89,10 @@ export default function ConversationsPage() {
 
       {conversations.length === 0 ? (
         <div className="border-border bg-card rounded-lg border p-8 text-center">
-          <h2 className="text-xl font-semibold mb-2">No conversations found</h2>
+          <h2 className="mb-2 text-xl font-semibold">No conversations found</h2>
           <p className="text-fg1 mb-4">
-            No conversation data is available yet. Conversations will appear here after discharge calls with Maya.
+            No conversation data is available yet. Conversations will appear here after discharge
+            calls with Maya.
           </p>
           <Button asChild variant="primary">
             <Link href="/app">Start a Conversation</Link>
@@ -99,10 +100,10 @@ export default function ConversationsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="text-sm text-fg1 mb-4">
+          <div className="text-fg1 mb-4 text-sm">
             Found {conversations.length} conversation{conversations.length !== 1 ? 's' : ''}
           </div>
-          
+
           {conversations.map((conversation) => (
             <div
               key={conversation.sessionId}
@@ -110,21 +111,20 @@ export default function ConversationsPage() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <h3 className="text-lg font-semibold font-mono">
-                      {conversation.sessionId}
-                    </h3>
-                    <span className="bg-primary/10 text-primary px-2 py-1 rounded-full text-xs font-medium">
+                  <div className="mb-2 flex items-center gap-3">
+                    <h3 className="font-mono text-lg font-semibold">{conversation.sessionId}</h3>
+                    <span className="bg-primary/10 text-primary rounded-full px-2 py-1 text-xs font-medium">
                       {conversation.messageCount} messages
                     </span>
                   </div>
-                  
-                  <div className="text-sm text-fg1 space-y-1">
+
+                  <div className="text-fg1 space-y-1 text-sm">
                     <div>
                       <strong>Started:</strong> {formatDate(conversation.startTime)}
                     </div>
                     <div>
-                      <strong>Duration:</strong> {formatDuration(conversation.startTime, conversation.endTime)}
+                      <strong>Duration:</strong>{' '}
+                      {formatDuration(conversation.startTime, conversation.endTime)}
                     </div>
                     {conversation.firstMessage && (
                       <div>
@@ -134,7 +134,7 @@ export default function ConversationsPage() {
                     )}
                   </div>
                 </div>
-                
+
                 <div className="flex items-center gap-2">
                   <Button asChild size="sm" variant="outline">
                     <Link href={`/conversations/${conversation.sessionId}`}>

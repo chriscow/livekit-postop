@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from 'redis';
 
 // Redis client setup
-let redisClient: any = null;
+let redisClient: ReturnType<typeof createClient> | null = null;
 
 async function getRedisClient() {
   if (!redisClient) {
@@ -36,18 +36,15 @@ export async function GET(
   try {
     const { sessionId } = await params;
     const redis = await getRedisClient();
-    
+
     // Get all messages for this conversation
     const conversationKey = `postop:conversations:${sessionId}`;
     const messages = await redis.lRange(conversationKey, 0, -1);
-    
+
     if (messages.length === 0) {
-      return NextResponse.json(
-        { error: 'Conversation not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
-    
+
     // Parse and sort messages by timestamp
     const parsedMessages: ConversationMessage[] = messages
       .map((msg: string) => {
@@ -65,18 +62,15 @@ export async function GET(
       })
       .filter((msg: ConversationMessage | null): msg is ConversationMessage => msg !== null)
       .sort((a: ConversationMessage, b: ConversationMessage) => a.timestamp - b.timestamp);
-    
+
     if (parsedMessages.length === 0) {
-      return NextResponse.json(
-        { error: 'No valid messages found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'No valid messages found' }, { status: 404 });
     }
-    
+
     const startTime = parsedMessages[0].timestamp;
     const endTime = parsedMessages[parsedMessages.length - 1].timestamp;
     const duration = endTime - startTime;
-    
+
     const conversationDetails: ConversationDetails = {
       sessionId,
       messages: parsedMessages,
@@ -85,14 +79,10 @@ export async function GET(
       endTime,
       duration,
     };
-    
+
     return NextResponse.json(conversationDetails);
-    
   } catch (error) {
     console.error('Failed to fetch conversation details:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch conversation details' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch conversation details' }, { status: 500 });
   }
 }

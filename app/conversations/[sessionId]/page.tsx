@@ -28,14 +28,12 @@ export default function ConversationDetailPage({
   const [conversation, setConversation] = useState<ConversationDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string>('');
 
   useEffect(() => {
     async function fetchConversation() {
       try {
         const resolvedParams = await params;
         const sessionIdValue = resolvedParams.sessionId;
-        setSessionId(sessionIdValue);
         const response = await fetch(`/api/conversations/${sessionIdValue}`);
         if (!response.ok) {
           if (response.status === 404) {
@@ -80,9 +78,7 @@ export default function ConversationDetailPage({
       <main className="mx-auto flex min-h-svh w-full max-w-6xl flex-col px-6 py-10">
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
-            <div className="text-lg text-red-600 mb-4">
-              {error || 'Conversation not found'}
-            </div>
+            <div className="mb-4 text-lg text-red-600">{error || 'Conversation not found'}</div>
             <Button asChild variant="outline">
               <Link href="/conversations">← Back to Conversations</Link>
             </Button>
@@ -94,12 +90,12 @@ export default function ConversationDetailPage({
 
   return (
     <main className="mx-auto flex min-h-svh w-full max-w-6xl flex-col px-6 py-10">
-      <header className="flex items-start justify-between py-2 mb-8">
+      <header className="mb-8 flex items-start justify-between py-2">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight font-mono">
+          <h1 className="font-mono text-3xl font-semibold tracking-tight">
             {conversation.sessionId}
           </h1>
-          <div className="mt-2 flex items-center gap-6 text-sm text-fg1">
+          <div className="text-fg1 mt-2 flex items-center gap-6 text-sm">
             <span>
               <strong>Started:</strong> {new Date(conversation.startTime * 1000).toLocaleString()}
             </span>
@@ -121,25 +117,23 @@ export default function ConversationDetailPage({
         </div>
       </header>
 
-      <div className="border-border bg-card rounded-lg border overflow-hidden">
-        <div className="bg-accent/30 px-6 py-3 border-b border-border">
+      <div className="border-border bg-card overflow-hidden rounded-lg border">
+        <div className="bg-accent/30 border-border border-b px-6 py-3">
           <h2 className="font-semibold">Conversation Transcript</h2>
         </div>
-        
-        <div className="divide-y divide-border max-h-[70vh] overflow-y-auto">
+
+        <div className="divide-border max-h-[70vh] divide-y overflow-y-auto">
           {conversation.messages.map((message, index) => (
             <div
               key={index}
               className={`px-6 py-4 ${
-                message.role === 'assistant' 
-                  ? 'bg-primary/5' 
-                  : 'bg-background'
+                message.role === 'assistant' ? 'bg-primary/5' : 'bg-background'
               }`}
             >
               <div className="flex items-start gap-4">
-                <div className="flex-shrink-0 w-16">
+                <div className="w-16 flex-shrink-0">
                   <div
-                    className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-semibold ${
+                    className={`inline-flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ${
                       message.role === 'assistant'
                         ? 'bg-primary text-white'
                         : 'bg-gray-500 text-white'
@@ -148,15 +142,13 @@ export default function ConversationDetailPage({
                     {message.role === 'assistant' ? 'M' : 'U'}
                   </div>
                 </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-3 mb-1">
+
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex items-center gap-3">
                     <span className="font-medium">
                       {message.role === 'assistant' ? 'Maya' : 'User'}
                     </span>
-                    <span className="text-xs text-fg1">
-                      {formatTime(message.timestamp)}
-                    </span>
+                    <span className="text-fg1 text-xs">{formatTime(message.timestamp)}</span>
                   </div>
                   <div className="text-sm leading-relaxed whitespace-pre-wrap">
                     {message.message}
@@ -166,11 +158,9 @@ export default function ConversationDetailPage({
             </div>
           ))}
         </div>
-        
+
         {conversation.messages.length === 0 && (
-          <div className="px-6 py-12 text-center text-fg1">
-            No messages in this conversation
-          </div>
+          <div className="text-fg1 px-6 py-12 text-center">No messages in this conversation</div>
         )}
       </div>
 
