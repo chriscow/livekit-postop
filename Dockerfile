@@ -65,9 +65,8 @@ COPY --from=frontend-builder /app/public ./public
 COPY --from=frontend-builder /app/package.json ./package.json
 COPY --from=frontend-builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=frontend-builder /app/next.config.ts ./next.config.ts
-COPY --from=frontend-builder /app/node_modules ./node_modules
 
-# Install production dependencies
+# Install production dependencies (don't copy node_modules from different OS)
 RUN cd /home/appuser && pnpm install --prod --frozen-lockfile
 
 # Set Python path
