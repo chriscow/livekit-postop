@@ -270,8 +270,8 @@ class DischargeAgent(Agent):
                 session_id = getattr(self.session.userdata, 'session_id', 'unknown')
                 response_text = event.item.text_content or ""
                 if response_text.strip():
-                    logger.info(f"[CONVERSATION ITEM] Session: {session_id} | Role: {event.item.role} | Text: '{response_text}'")
-                    print(f"[CONVERSATION LOG] Session: {session_id} | MAYA CONVERSATION: '{response_text}'")
+                    logger.info(f"[on_conversation_item_added] Session: {session_id} | Role: {event.item.role} | Text: '{response_text}'")
+                    print(f"[on_conversation_item_added] Session: {session_id} | Role: {event.item.role} | Text: '{response_text}'")
                     
                     # Store conversation in Redis
                     self._log_conversation_message(session_id, "assistant", response_text)
@@ -279,6 +279,7 @@ class DischargeAgent(Agent):
         await self.session.say("Hi all! I'm Maya, thanks for dialing me in today. So Dr. Shah, who do we have in the room today?", allow_interruptions=False)
 
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        return None 
         """Handle user speech completion with exit detection and TTS suppression during passive mode"""
         # Get passive mode status from session userdata
         is_passive_mode = getattr(self.session.userdata, 'is_passive_mode', False)
@@ -296,30 +297,31 @@ class DischargeAgent(Agent):
         if is_passive_mode:
             # Explicit exit detection before any generation
             if transcript_text.strip() and self._should_exit_passive_mode(transcript_text):
-                logger.info(f"[EXIT DETECTION] Session: {session_id} | Exit signal detected: '{transcript_text[:50]}...'")
-                print(f"[EXIT DETECTION] Passive mode exit triggered by: '{transcript_text}'")
+                logger.info(f"[on_user_turn_completed] Session: {session_id} | Exit signal detected: '{transcript_text[:50]}...'")
+                print(f"[on_user_turn_completed] Passive mode exit triggered by: '{transcript_text}'")
                 # Exit passive mode immediately
                 self.session.userdata.is_passive_mode = False
                 self._tts_suppressed = False  # Re-enable TTS for exit response
-                # Provide summary
+                # Re-enable audio output so the summary can be heard
+                try:
+                    self.session.output.set_audio_enabled(True)
+                    logger.debug("[on_user_turn_completed] Output audio re-enabled on exit")
+                except Exception as e:
+                    logger.error(f"[on_user_turn_completed] Failed to re-enable output audio: {e}")
 
-                
-                # await self.provide_instruction_summary(ctx=self.chat_ctx)
-                # Prevent default LLM reply for this turn
-                # raise StopResponse()
-                self.session.generate_reply(instructions="Thank Dr. Shah. Are you ready for me to review the instructions?")
+                await self.session.generate_reply(instructions="Thank Dr. Shah. Are you ready for me to review the instructions?")
 
             else:
                 # Continue passive mode - suppress TTS but allow LLM/tool calls
                 self._tts_suppressed = True
-                logger.debug(f"[PASSIVE STATE] Session: {session_id} | Continuing passive mode - TTS suppressed (LLM/tools allowed)")
-                print(f"[DEBUG] Passive mode continues: '{transcript_text}' - LLM may call tools; TTS suppressed")
+                logger.debug(f"[on_user_turn_completed] Session: {session_id} | Continuing passive mode - TTS suppressed (LLM/tools allowed)")
+                print(f"[on_user_turn_completed] Passive mode continues: '{transcript_text}' - LLM may call tools; TTS suppressed")
                 # Fire-and-forget a background analysis call to OpenAI (stub)
                 if transcript_text.strip():
                     try:
                         await self._passive_openai_analysis(session_id, transcript_text)
                     except Exception as e:
-                        logger.error(f"[PASSIVE ANALYSIS] Error: {e}")
+                        logger.error(f"[_passive_openai_analysis] Error: {e}")
                 else:
                     logger.debug(f"[PASSIVE STATE] Session: {session_id} | No text to analyze in passive mode.")
         else:
@@ -365,6 +367,14 @@ class DischargeAgent(Agent):
         self.memory.store_session_data(ctx.userdata.session_id, "is_passive_mode", True)
         
         await self.session.generate_reply(instructions=f"Thank Dr. Shah and greet the other people in the room by name. Then let everyone know that you will listen quietly while Dr. Shah gives {ctx.userdata.patient_name}'s discharge instructions.")
+
+        # Mute audio output while in passive mode (prevent any TTS playback)
+        try:
+            self.session.output.set_audio_enabled(False)
+            logger.debug("[PASSIVE AUDIO] Output audio disabled")
+        except Exception as e:
+            logger.error(f"[PASSIVE AUDIO] Failed to disable output audio: {e}")
+
         return None, None
     
     @function_tool()
@@ -394,6 +404,16 @@ class DischargeAgent(Agent):
         
         Call this function AS SOON AS you detect completion - don't wait!
         """
+
+        self.session.userdata.is_passive_mode = False
+        self._tts_suppressed = False  # Re-enable TTS for exit response
+        # Re-enable audio output so the summary can be heard
+        try:
+            self.session.output.set_audio_enabled(True)
+            logger.debug("[on_user_turn_completed] Output audio re-enabled on exit")
+        except Exception as e:
+            logger.error(f"[on_user_turn_completed] Failed to re-enable output audio: {e}")
+
         is_passive_mode = getattr(ctx.userdata, 'is_passive_mode', False)
         session_id = getattr(ctx.userdata, 'session_id', 'unknown')
         
@@ -406,6 +426,12 @@ class DischargeAgent(Agent):
         ctx.userdata.is_passive_mode = False
         ctx.userdata.workflow_mode = "verification"
         self._tts_suppressed = False  # Re-enable TTS for summary
+        # Ensure audio output is re-enabled for readback
+        try:
+            ctx.session.output.set_audio_enabled(True)
+            logger.debug("[PASSIVE AUDIO] Output audio re-enabled for summary")
+        except Exception as e:
+            logger.error(f"[PASSIVE AUDIO] Failed to re-enable output audio: {e}")
         logger.info(f"[WORKFLOW] Session: {session_id} | Exiting passive mode and providing summary")
         
         # Build a deterministic summary instead of relying entirely on LLM to avoid re-enter style responses
@@ -662,9 +688,9 @@ class DischargeAgent(Agent):
             )
             content = resp.choices[0].message.content if resp and resp.choices else ""
             if content:
-                logger.info(f"[PASSIVE ANALYSIS] Session: {session_id} | {content}")
+                logger.info(f"[_passive_openai_analysis] Session: {session_id} | {content}")
         except Exception as e:
-            logger.error(f"[PASSIVE ANALYSIS] OpenAI call failed: {e}")
+            logger.error(f"[_passive_openai_analysis] OpenAI call failed: {e}")
 
 
 # Console entrypoint
@@ -709,6 +735,12 @@ async def console_entrypoint(ctx: JobContext):
                     logger.info("[SILENCE EXIT] Sustained silence detected; exiting passive mode")
                     session.userdata.is_passive_mode = False
                     agent._tts_suppressed = False
+                    # Re-enable audio output for summary
+                    try:
+                        session.output.set_audio_enabled(True)
+                        logger.debug("[PASSIVE AUDIO] Output audio re-enabled on silence exit")
+                    except Exception as e:
+                        logger.error(f"[PASSIVE AUDIO] Failed to re-enable output audio: {e}")
                     await agent._exit_passive_mode_and_summarize()
                 asyncio.create_task(_auto_exit())
         except Exception as e:
@@ -758,6 +790,12 @@ async def production_entrypoint(ctx: JobContext):
                     logger.info("[SILENCE EXIT] Sustained silence detected; exiting passive mode")
                     session.userdata.is_passive_mode = False
                     agent._tts_suppressed = False
+                    # Re-enable audio output for summary
+                    try:
+                        session.output.set_audio_enabled(True)
+                        logger.debug("[PASSIVE AUDIO] Output audio re-enabled on silence exit")
+                    except Exception as e:
+                        logger.error(f"[PASSIVE AUDIO] Failed to re-enable output audio: {e}")
                     await agent._exit_passive_mode_and_summarize()
                 asyncio.create_task(_auto_exit())
         except Exception as e:
