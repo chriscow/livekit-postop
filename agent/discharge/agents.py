@@ -167,11 +167,10 @@ class DischargeAgent(Agent):
         instructions = (
             "You are Maya, an AI discharge assistant.\n"
             "GOAL: Capture ONLY true discharge instructions while in passive mode; ignore filler.\n\n"
-            "Passive protocol:\n"
-            "1. Brief intro, ask who is present, then call start_passive_listening.\n"
-            "2. While passive: speak ONLY if directly addressed, asked to translate, or completion/verification is requested.\n"
-            "3. Silently capture instructions.\n\n"
-            "Capture IF the utterance conveys actionable medical guidance (examples):\n"
+            "Step by step instructions:\n"
+            "1. Briefly introduce yourself and ask who is present in the room, then call start_passive_listening.\n"
+            "2. Silently capture instructions.\n\n"
+            "Capture IF the utterance conveys actual medical guidance (examples):\n"
             "- Medication: name, dose, frequency, route, duration (\"Take two Tylenol every four hours for pain\")\n"
             "- Activity / mobility restrictions (\"No heavy lifting for two weeks\")\n"
             "- Wound or incision care (cleaning, dressing, showering guidance)\n"
@@ -181,6 +180,8 @@ class DischargeAgent(Agent):
             "- Device usage or care (brace, sling, ice, compression, drains)\n"
             "- Explicit precautions (bathing, driving, sexual activity, smoking, alcohol)\n\n"
             "IGNORE (do NOT capture): greetings, acknowledgements, thanks, names/vocatives alone, chit-chat, encouragement, partial fragments without actionable content, standalone patient name, or single-word responses.\n\n"
+            
+            "During passive mode, you can only respond if directly addressed, asked to translate, or completion/verification is requested.\n\n"
             "On exit (triggered by name or completion phrase):\n"
             "1. Provide concise bullet list of ONLY captured instructions (merged into complete lines; no filler numbers if none captured).\n"
             "2. Ask once if anything is missing or needs correction (<= 1 short sentence).\n"
@@ -242,28 +243,12 @@ class DischargeAgent(Agent):
         self._original_generate_reply = None
         self._tts_suppressed = False  # TTS suppression during passive mode
         
-    def _log_conversation_message(self, session_id: str, role: str, message: str):
-        """Log conversation message to Redis"""
+        # Create a lightweight OpenAI async client for custom calls (reuses env OPENAI_API_KEY)
         try:
-            import json
-            import time
-            
-            # Create message entry
-            msg_data = {
-                "timestamp": time.time(),
-                "role": role,
-                "message": message.strip()
-            }
-            
-            # Store in Redis
-            key = f"postop:conversations:{session_id}"
-            self.redis_client.lpush(key, json.dumps(msg_data))
-            
-            # Add session to sessions set for listing
-            self.redis_client.sadd("postop:conversations:sessions", session_id)
-            
-        except Exception as e:
-            logger.error(f"Failed to log conversation message: {e}")
+            from livekit.plugins.openai import openai as lk_openai
+            self._openai_client = lk_openai.AsyncClient()
+        except Exception:
+            self._openai_client = None
         
     async def on_enter(self):
         # Generate a simple session ID for tracking (use timestamp-based)
@@ -291,192 +276,81 @@ class DischargeAgent(Agent):
                     # Store conversation in Redis
                     self._log_conversation_message(session_id, "assistant", response_text)
         
-        await self.session.say("Hi all! I'm Maya, thanks for dialing me in today. So Dr. Shah, who do we have in the room today?")
-        
-    async def _logged_say(self, message: str):
-        """Wrapper for session.say that logs all outgoing messages and handles TTS suppression"""
+        await self.session.say("Hi all! I'm Maya, thanks for dialing me in today. So Dr. Shah, who do we have in the room today?", allow_interruptions=False)
+
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        """Handle user speech completion with exit detection and TTS suppression during passive mode"""
+        # Get passive mode status from session userdata
+        is_passive_mode = getattr(self.session.userdata, 'is_passive_mode', False)
         session_id = getattr(self.session.userdata, 'session_id', 'unknown')
-        logger.info(f"[LLM OUTPUT] Session: {session_id} | Text: '{message}'")
-        print(f"[CONVERSATION LOG] Session: {session_id} | MAYA OUTPUT: '{message}'")
+        
+        # Comprehensive STT logging with session tracking
+        transcript_text = new_message.text_content or ""
+        logger.info(f"[STT INPUT] Session: {session_id} | Passive: {is_passive_mode} | Text: '{transcript_text}'")
+        print(f"[CONVERSATION LOG] Session: {session_id} | USER INPUT: '{transcript_text}'")
         
         # Store conversation in Redis
-        self._log_conversation_message(session_id, "assistant", message)
+        if transcript_text.strip():  # Only log non-empty messages
+            self._log_conversation_message(session_id, "user", transcript_text)
         
-        # Check if TTS should be suppressed during passive mode
-        if self._tts_suppressed:
-            logger.info(f"[TTS SUPPRESSED] Session: {session_id} | Passive mode - message logged but not spoken: '{message}'")
-            print(f"[TTS SUPPRESSED] Session: {session_id} | PASSIVE MODE: '{message}'")
-            return None  # Suppress TTS output
-        
-        # Call original say method for normal speech
-        return await self._original_say(message)
+        if is_passive_mode:
+            # Explicit exit detection before any generation
+            if transcript_text.strip() and self._should_exit_passive_mode(transcript_text):
+                logger.info(f"[EXIT DETECTION] Session: {session_id} | Exit signal detected: '{transcript_text[:50]}...'")
+                print(f"[EXIT DETECTION] Passive mode exit triggered by: '{transcript_text}'")
+                # Exit passive mode immediately
+                self.session.userdata.is_passive_mode = False
+                self._tts_suppressed = False  # Re-enable TTS for exit response
+                # Provide summary
 
-    async def _logged_generate_reply(self, *args, **kwargs):
-        """Wrapper for session.generate_reply that logs responses"""
-        # Call original generate_reply method and capture response
-        response = await self._original_generate_reply(*args, **kwargs)
-        
-        # Log the generated response if available
-        if hasattr(response, 'text_content') and response.text_content:
-            session_id = getattr(self.session.userdata, 'session_id', 'unknown')
-            logger.info(f"[LLM GENERATE_REPLY] Session: {session_id} | Text: '{response.text_content}'")
-            print(f"[CONVERSATION LOG] Session: {session_id} | MAYA GENERATE_REPLY: '{response.text_content}'")
-            
-            # Store conversation in Redis
-            self._log_conversation_message(session_id, "assistant", response.text_content)
-        
-        return response
-
-    def _should_exit_passive_mode(self, transcript: str) -> bool:
-        """
-        Analyze transcript to determine if agent should exit passive listening mode.
-        
-        Args:
-            transcript: The user's speech transcript
-            
-        Returns:
-            True if agent should exit passive mode, False otherwise
-        """
-        if not transcript:
-            return False
-            
-        # Convert to lowercase for case-insensitive matching
-        text = transcript.lower().strip()
-        # Detailed debug logging of evaluation
-        logger.debug(f"[PASSIVE CHECK] Evaluating transcript for exit: '{text}'")
-        
-        # Direct address patterns (strict)
-        if self._is_maya_directly_addressed(text):
-            logger.debug("[PASSIVE CHECK] Matched direct address to Maya (strict)")
-            return True
-
-        # Completion signals
-        completion_phrases = [
-            "finished", "done", "that's all", "we're done", "we're all set",
-            "any questions", "all done", "we're finished", "that's it",
-            "that's everything", "that covers everything", "that should be everything",
-            "that should be it", "nothing else", "nothing more", "wrap up", "wraps up",
-        ]
-        # Exclusions for partial/section completion
-        exclusion_phrases = [
-            "almost finished", "almost done", "done with this", "finished with this",
-            "this particular", "one instruction down"
-        ]
-        for phrase in completion_phrases:
-            if phrase in text:
-                if any(ex in text for ex in exclusion_phrases):
-                    logger.debug(f"[PASSIVE CHECK] Ignoring partial completion around: '{phrase}'")
-                    break
-                logger.debug(f"[PASSIVE CHECK] Matched completion phrase: '{phrase}'")
-                return True
                 
-        # NOTE: Translation requests should NOT exit passive mode; handled elsewhere
+                # await self.provide_instruction_summary(ctx=self.chat_ctx)
+                # Prevent default LLM reply for this turn
+                # raise StopResponse()
+                self.session.generate_reply(instructions="Thank Dr. Shah. Are you ready for me to review the instructions?")
 
-        # Social closings (exit only if we have captured some instructions)
-        social_closings = [
-            "good luck", "take care", "feel better", "have a good day", "see you later",
-            "get well", "rest well", "be safe", "speedy recovery", "get some rest", "heal well"
-        ]
-        if any(phrase in text for phrase in social_closings):
-            try:
-                collected = getattr(self.session.userdata, 'collected_instructions', [])
-                if collected and len(collected) > 0:
-                    logger.debug("[PASSIVE CHECK] Matched social closing after instructions")
-                    return True
-            except Exception:
-                # If session not available here, be conservative and continue
-                pass
+            else:
+                # Continue passive mode - suppress TTS but allow LLM/tool calls
+                self._tts_suppressed = True
+                logger.debug(f"[PASSIVE STATE] Session: {session_id} | Continuing passive mode - TTS suppressed (LLM/tools allowed)")
+                print(f"[DEBUG] Passive mode continues: '{transcript_text}' - LLM may call tools; TTS suppressed")
+                # Fire-and-forget a background analysis call to OpenAI (stub)
+                if transcript_text.strip():
+                    try:
+                        await self._passive_openai_analysis(session_id, transcript_text)
+                    except Exception as e:
+                        logger.error(f"[PASSIVE ANALYSIS] Error: {e}")
+                else:
+                    logger.debug(f"[PASSIVE STATE] Session: {session_id} | No text to analyze in passive mode.")
+        else:
+            # Normal mode - enable TTS
+            self._tts_suppressed = False
+            
+        # Let the LLM process the input normally (no StopResponse)
+        # This allows tool calls like collect_instruction and intelligent exit detection
 
-        # Capture verification
-        capture_phrases = [
-            "did you get", "did you capture", "did you hear", "did you catch",
-            "get all that", "capture all", "hear all"
-        ]
-        for phrase in capture_phrases:
-            if phrase in text:
-                logger.debug(f"[PASSIVE CHECK] Matched capture verification phrase: '{phrase}'")
-                return True
-                
-        # Explicit exit instructions
-        exit_phrases = [
-            "exit passive", "stop listening", "exit listening"
-        ]
-        for phrase in exit_phrases:
-            if phrase in text:
-                logger.debug(f"[PASSIVE CHECK] Matched explicit exit phrase: '{phrase}'")
-                return True
-                
-        logger.debug("[PASSIVE CHECK] No exit trigger matched for transcript")
-        return False
-
-    # Instruction Collection Functions (from PassiveListeningAgent)
     @function_tool
-    async def collect_instruction(self, ctx: RunContext[SessionData], instruction_text: str, instruction_type: str = "general"):
+    async def collect_instruction(self, ctx: RunContext[SessionData], instruction_text: str):
         """
-        Collect a medical discharge instruction being read aloud
+        Collect a medical discharge instruction being read aloud. These are items related to the patient's post operative recovery and care.
         
         Args:
             instruction_text: The instruction being given
             instruction_type: Type of instruction (medication, activity, followup, warning, etc.)
         """
         from datetime import datetime
-        instruction = {
-            "text": instruction_text,
-            "type": instruction_type,
+        entry = {
+            "text": instruction_text.strip(),
             "timestamp": datetime.now().isoformat()
         }
-        
-        ctx.userdata.collected_instructions.append(instruction)
-        logger.info(f"Collected instruction: {instruction_type} - {instruction_text[:50]}...")
+        ctx.userdata.collected_instructions.append(entry)
+        logger.info(f"Collected instruction: {entry['text'][:60]}...")
         
         # Stay silent in passive mode unless directly asked
         if ctx.userdata.workflow_mode == "passive_listening" and ctx.userdata.is_passive_mode:
             return None, None  # Silent collection
         else:
             return None, "I've noted that instruction."
-
-
-    def _maybe_collect_instruction_from_transcript(self, transcript_text: str) -> None:
-        """Lightweight heuristic to capture likely discharge instructions silently during passive mode."""
-        if not transcript_text:
-            return
-        text = transcript_text.strip()
-        lower = text.lower()
-        # Ignore obvious non-instruction chatter
-        if len(text.split()) < 4:
-            return
-        noise_starts = (
-            "hi ", "hello ", "thanks", "thank you", "um", "uh", "hmm", "okay", "ok ", "alright",
-        )
-        if lower.startswith(noise_starts):
-            return
-        # Heuristic classification
-        instruction_type = "general"
-        if any(k in lower for k in ["take ", "mg", "tablet", "capsule", "dose", "every ", "twice", "once", "ibuprofen", "tylenol", "acetaminophen", "antibiotic"]):
-            instruction_type = "medication"
-        elif any(k in lower for k in ["follow up", "appointment", "schedule", "call the office", "clinic", "phone number"]):
-            instruction_type = "followup"
-        elif any(k in lower for k in ["fever", "bleeding", "911", "er ", "emergency", "shortness of breath", "worsening", "severe pain", "warning"]):
-            instruction_type = "warning"
-        elif any(k in lower for k in ["wound", "incision", "dressing", "keep it dry", "change the", "clean", "shower", "bathing"]):
-            instruction_type = "wound"
-        elif any(k in lower for k in ["no lifting", "lift anything", "weight-bearing", "walk", "driving", "activity", "avoid", "do not "]):
-            instruction_type = "activity"
-        elif any(k in lower for k in ["brace", "sling", "ice", "compression", "device", "boot"]):
-            instruction_type = "device"
-        elif any(k in lower for k in ["diet", "eat", "drink", "hydration", "fluid", "alcohol", "smoking"]):
-            instruction_type = "diet"
-
-        # Don't collect if it's clearly a question unrelated to instructions
-        if lower.endswith("?") and not any(k in lower for k in ["did you get", "did you capture", "any questions"]):
-            return
-
-        # Append to session user data
-        from datetime import datetime
-        item = {"text": text, "type": instruction_type, "timestamp": datetime.now().isoformat()}
-        self.session.userdata.collected_instructions.append(item)
-        logger.info(f"[PASSIVE CAPTURE] Heuristic collected: {instruction_type} - {text[:80]}...")
-
 
     # Workflow Transition Functions
     @function_tool
@@ -490,11 +364,11 @@ class DischargeAgent(Agent):
         self.memory.store_session_data(ctx.userdata.session_id, "workflow_mode", "passive_listening")
         self.memory.store_session_data(ctx.userdata.session_id, "is_passive_mode", True)
         
-        intro_message = f"Got it, I'll listen quietly while you go through {ctx.userdata.patient_name}'s instructions."
-        return None, intro_message
+        await self.session.generate_reply(instructions=f"Thank Dr. Shah and greet the other people in the room by name. Then let everyone know that you will listen quietly while Dr. Shah gives {ctx.userdata.patient_name}'s discharge instructions.")
+        return None, None
     
     @function_tool()
-    async def provide_instruction_summary(self, ctx: RunContext):
+    async def provide_instruction_summary(self, ctx: RunContext[SessionData]):
         """
         🚨 CRITICAL: Call this function IMMEDIATELY when discharge instruction giving is complete!
         
@@ -536,14 +410,13 @@ class DischargeAgent(Agent):
         
         # Build a deterministic summary instead of relying entirely on LLM to avoid re-enter style responses
         raw_list = ctx.userdata.collected_instructions if hasattr(ctx.userdata, 'collected_instructions') else []
-        # Normalize to list of (text, type)
+        # Build from collected instruction entries (simple text + type)
         normalized: list[tuple[str,str]] = []
         for item in raw_list:
             if not item:
                 continue
             if isinstance(item, dict):
-                text = item.get("text", "").strip()
-                itype = item.get("type", "general")
+                text = (item.get("text") or "").strip()
             else:
                 text = str(item).strip()
                 itype = "general"
@@ -558,6 +431,7 @@ class DischargeAgent(Agent):
                 seen.add(key)
                 dedup.append((text, itype))
         logger.debug(f"[WORKFLOW] Session: {session_id} | Instruction count (unique): {len(dedup)}")
+        # Simple bullet list with type labels
         bullet_lines = [f"{idx}. ({itype}) {text}" for idx, (text, itype) in enumerate(dedup, start=1)]
         summary_block = "\n".join(bullet_lines) if bullet_lines else "(No discharge instructions were detected.)"
         summary_intro = "Here are the discharge instructions I captured:" if bullet_lines else "I didn't confidently hear any explicit discharge instructions." 
@@ -566,78 +440,10 @@ class DischargeAgent(Agent):
         logger.debug(f"[WORKFLOW] Session: {session_id} | Deterministic exit summary prepared")
         
         # Send deterministic summary first to avoid LLM drifting back into passive intro
-        await ctx.session.say(deterministic_reply)
+        await ctx.session.generate_reply(f"Here are the discharge instructions you captured:\n{summary_block}\nIf you didn't capture any, let them know. Ask them to let you know if something should be added or corrected.")
         
-        # Optionally ask LLM for refinement ONLY if we have at least one instruction
-        if dedup:
-            try:
-                await ctx.session.generate_reply(
-                    instructions=(
-                        "You just provided a deterministic bullet list summary of discharge instructions. "
-                        "Now, briefly (<= 2 short sentences) ask if they'd like any clarification or if anything was missed. "
-                        "Do NOT say you will listen quietly again. Do NOT restate you are starting passive mode."
-                    )
-                )
-            except Exception as e:
-                logger.error(f"[WORKFLOW] Session: {session_id} | Optional refinement failed: {e}")
         return "Exited passive listening mode and provided summary"
 
-    async def _exit_passive_mode_and_summarize(self):
-        """
-        Direct method to exit passive mode and provide instruction summary.
-        This bypasses the function_tool wrapper for direct programmatic calls.
-        """
-        session_id = getattr(self.session.userdata, 'session_id', 'unknown')
-        logger.info(f"[WORKFLOW] Session: {session_id} | Exiting passive mode and providing summary")
-        # Update workflow state
-        self.session.userdata.workflow_mode = "verification"
-        
-        # Build a deterministic summary instead of relying entirely on LLM to avoid re-enter style responses
-        raw_list = self.session.userdata.collected_instructions if hasattr(self.session.userdata, 'collected_instructions') else []
-        # Normalize to list of (text, type)
-        normalized: list[tuple[str,str]] = []
-        for item in raw_list:
-            if not item:
-                continue
-            if isinstance(item, dict):
-                text = item.get("text", "").strip()
-                itype = item.get("type", "general")
-            else:
-                text = str(item).strip()
-                itype = "general"
-            if text:
-                normalized.append((text, itype))
-        # De-duplicate by lowercase text preserving order
-        seen = set()
-        dedup: list[tuple[str,str]] = []
-        for text, itype in normalized:
-            key = text.lower()
-            if key not in seen:
-                seen.add(key)
-                dedup.append((text, itype))
-        logger.debug(f"[WORKFLOW] Session: {session_id} | Instruction count (unique): {len(dedup)}")
-        bullet_lines = [f"{idx}. ({itype}) {text}" for idx, (text, itype) in enumerate(dedup, start=1)]
-        summary_block = "\n".join(bullet_lines) if bullet_lines else "(No discharge instructions were detected.)"
-        summary_intro = "Here are the discharge instructions I captured:" if bullet_lines else "I didn't confidently hear any explicit discharge instructions." 
-        deterministic_reply = f"{summary_intro}\n{summary_block}\nLet me know if something should be added or corrected."
-        # Log deterministic reply content
-        logger.debug(f"[WORKFLOW] Session: {session_id} | Deterministic exit summary prepared")
-        
-        # Send deterministic summary first to avoid LLM drifting back into passive intro
-        await self.session.say(deterministic_reply)
-        
-        # Optionally ask LLM for refinement ONLY if we have at least one instruction
-        if dedup:
-            try:
-                await self.session.generate_reply(
-                    instructions=(
-                        "You just provided a deterministic bullet list summary of discharge instructions. "
-                        "Now, briefly (<= 2 short sentences) ask if they'd like any clarification or if anything was missed. "
-                        "Do NOT say you will listen quietly again. Do NOT restate you are starting passive mode."
-                    )
-                )
-            except Exception as e:
-                logger.error(f"[WORKFLOW] Session: {session_id} | Optional refinement failed: {e}")
 
     def _is_maya_directly_addressed(self, message_lower: str) -> bool:
         """
@@ -695,170 +501,170 @@ class DischargeAgent(Agent):
         # Default: if "maya" appears but no clear pattern, be conservative (don't trigger)
         return False
 
-    # BUGBUG: This doesn't seem to be called
-    # async def analyze_exit_signal(self, ctx: RunContext, user_message: str):
-    #     """
-    #     Chain of Thought: Analyze if the user message signals completion of discharge instructions.
+    def _should_exit_passive_mode(self, transcript: str) -> bool:
+        """
+        Analyze transcript to determine if agent should exit passive listening mode.
         
-    #     Use this function to think through exit decisions systematically:
-    #     1. What did the user just say?
-    #     2. Does it contain any exit signals?
-    #     3. Should I call provide_instruction_summary?
-        
-    #     Args:
-    #         user_message: The exact text the user just said
+        Args:
+            transcript: The user's speech transcript
             
-    #     Returns analysis and recommendation for whether to exit passive mode.
-    #     """
-        
-    #     message_lower = user_message.lower().strip()
-        
-    #     # Chain of thought analysis
-    #     analysis = {
-    #         "message": user_message,
-    #         "contains_maya": self._is_maya_directly_addressed(message_lower),
-    #         "completion_phrases": [],
-    #         "social_closings": [],
-    #         "verification_requests": [],
-    #         "exit_recommendation": False,
-    #         "confidence": 0.0,
-    #         "reasoning": ""
-    #     }
-        
-    #     # Check for completion phrases - Hypothesis 2 expansion
-    #     completion_signals = [
-    #         # Original high-confidence signals  
-    #         "that's all", "that's everything", "any questions", "we're done", "we're finished", 
-    #         "that covers it", "finished", "done", "complete",
+        Returns:
+            True if agent should exit passive mode, False otherwise
+        """
+        if not transcript:
+            return False
             
-    #         # Hypothesis 2: New informal completion patterns
-    #         "covers everything", "that covers everything", "alright, that covers everything",
-    #         "should be everything", "that should be everything you need", "that should be everything",
-    #         "wraps up", "that wraps up", "wraps up the", 
-    #         "concludes", "that concludes", "concludes our",
-    #         "nothing else to add", "nothing else", "nothing more to add",
-    #         "i believe that's everything", "believe that's everything", "i think that's everything",
-    #     ]
+        # Convert to lowercase for case-insensitive matching
+        text = transcript.lower().strip()
+        # Detailed debug logging of evaluation
+        logger.debug(f"[PASSIVE CHECK] Evaluating transcript for exit: '{text}'")
         
-    #     # Check for partial completion exclusions (should NOT trigger exit)
-    #     partial_completion_exclusions = [
-    #         "done with this particular", "finished with this particular", 
-    #         "almost finished", "almost done", "we're almost",
-    #         "about the medication", "about this medication", "questions about",
-    #     ]
-        
-    #     # Apply completion signal detection with exclusion logic
-    #     for signal in completion_signals:
-    #         if signal in message_lower:
-    #             # Check if this is actually a partial completion that should be excluded
-    #             is_partial = False
-    #             for exclusion in partial_completion_exclusions:
-    #                 if exclusion in message_lower:
-    #                     is_partial = True
-    #                     break
-                
-    #             if not is_partial:
-    #                 analysis["completion_phrases"].append(signal)
-    #                 analysis["confidence"] = max(analysis["confidence"], 0.9)
-        
-    #     # Check for social closings - Hypothesis 2 expansion
-    #     social_signals = [
-    #         # Original signals
-    #         "good luck", "take care", "feel better", "have a good day", 
-    #         "see you later", "get well", "rest well", "be safe",
-            
-    #         # Hypothesis 2: New social closing patterns
-    #         "take it easy", "take it easy and", "get some rest", "and get some rest",
-    #         "wishing you", "wishing you a speedy recovery", "speedy recovery", 
-    #         "have a great day", "heal well", "and heal well",
-    #     ]
-    #     for signal in social_signals:
-    #         if signal in message_lower:
-    #             analysis["social_closings"].append(signal)
-    #             analysis["confidence"] = max(analysis["confidence"], 0.7)
-        
-    #     # Check for verification requests - Hypothesis 2 expansion
-    #     verification_signals = [
-    #         # Original high-confidence verification patterns
-    #         "did you get", "did you capture", "can you repeat", 
-    #         "what did you hear", "did you understand",
-            
-    #         # Hypothesis 2: New verification patterns from false negatives
-    #         "were you able to", "were you able to record", "able to record everything",
-    #         "do you have all", "do you have all of that", "have all of that",
-    #         "are you following", "are you following along", "following along okay",
-    #     ]
-    #     for signal in verification_signals:
-    #         if signal in message_lower:
-    #             analysis["verification_requests"].append(signal)
-    #             analysis["confidence"] = max(analysis["confidence"], 0.8)
-        
-    #     # Direct Maya address gets highest confidence
-    #     if analysis["contains_maya"]:
-    #         analysis["confidence"] = 0.95
-            
-    #     # Make exit recommendation
-    #     if analysis["confidence"] >= 0.7:
-    #         analysis["exit_recommendation"] = True
-    #         analysis["reasoning"] = f"HIGH confidence exit signal detected (confidence: {analysis['confidence']:.1f})"
-    #     else:
-    #         analysis["exit_recommendation"] = False
-    #         analysis["reasoning"] = f"No clear exit signal detected (confidence: {analysis['confidence']:.1f})"
-            
-    #     # If we recommend exit, call the summary function
-    #     if analysis["exit_recommendation"]:
-    #         logger.info(f"[CHAIN OF THOUGHT] Session: {ctx.userdata.session_id} | Exit recommended: {analysis['reasoning']}")
-    #         await self.provide_instruction_summary(ctx)
-    #         return f"Analysis complete: {analysis['reasoning']} - Exiting passive mode now!"
-    #     else:
-    #         logger.debug(f"[CHAIN OF THOUGHT] Session: {ctx.userdata.session_id} | Continuing passive mode: {analysis['reasoning']}")
-    #         return f"Analysis complete: {analysis['reasoning']} - Continuing passive listening."
+        # Direct address patterns (strict)
+        if self._is_maya_directly_addressed(text):
+            logger.debug("[PASSIVE CHECK] Matched direct address to Maya (strict)")
+            return True
 
-    # Removed record_discharge_instruction in favor of collect_instruction
+        # Completion signals
+        completion_phrases = [
+            "finished", "done", "that's all", "we're done", "we're all set",
+            "any questions", "all done", "we're finished", "that's it",
+            "that's everything", "that covers it", "that covers everything", "that should be everything",
+            "that should be it", "nothing else", "nothing more", "wrap up", "wraps up",
+        ]
+        # Exclusions for partial/section completion
+        exclusion_phrases = [
+            "almost finished", "almost done", "done with this", "finished with this",
+            "this particular", "one instruction down"
+        ]
+        for phrase in completion_phrases:
+            if phrase in text:
+                if any(ex in text for ex in exclusion_phrases):
+                    logger.debug(f"[PASSIVE CHECK] Ignoring partial completion around: '{phrase}'")
+                    break
+                logger.debug(f"[PASSIVE CHECK] Matched completion phrase: '{phrase}'")
+                return True
+                
+        # NOTE: Translation requests should NOT exit passive mode; handled elsewhere
+
+        # Social closings (exit only if we have captured some instructions)
+        social_closings = [
+            "good luck", "take care", "feel better", "have a good day", "see you later",
+            "get well", "rest well", "be safe", "speedy recovery", "get some rest", "heal well"
+        ]
+        if any(phrase in text for phrase in social_closings):
+            try:
+                collected = getattr(self.session.userdata, 'collected_instructions', [])
+                if collected and len(collected) > 0:
+                    logger.debug("[PASSIVE CHECK] Matched social closing after instructions")
+                    return True
+            except Exception:
+                # If session not available here, be conservative and continue
+                pass
+
+        # Capture verification
+        capture_phrases = [
+            "did you get", "did you capture", "did you hear", "did you catch",
+            "get all that", "capture all", "hear all"
+        ]
+        for phrase in capture_phrases:
+            if phrase in text:
+                logger.debug(f"[PASSIVE CHECK] Matched capture verification phrase: '{phrase}'")
+                return True
+                
+        # Explicit exit instructions
+        exit_phrases = [
+            "exit passive", "stop listening", "exit listening"
+        ]
+        for phrase in exit_phrases:
+            if phrase in text:
+                logger.debug(f"[PASSIVE CHECK] Matched explicit exit phrase: '{phrase}'")
+                return True
+                
+        logger.debug("[PASSIVE CHECK] No exit trigger matched for transcript")
+        return False
+
+    def _log_conversation_message(self, session_id: str, role: str, message: str):
+        """Log conversation message to Redis"""
+        try:
+            import json
+            import time
+            
+            # Create message entry
+            msg_data = {
+                "timestamp": time.time(),
+                "role": role,
+                "message": message.strip()
+            }
+            
+            # Store in Redis
+            key = f"postop:conversations:{session_id}"
+            self.redis_client.lpush(key, json.dumps(msg_data))
+            
+            # Add session to sessions set for listing
+            self.redis_client.sadd("postop:conversations:sessions", session_id)
+            
+        except Exception as e:
+            logger.error(f"Failed to log conversation message: {e}")
         
-    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
-        """Handle user speech completion with exit detection and TTS suppression during passive mode"""
-        # Get passive mode status from session userdata
-        is_passive_mode = getattr(self.session.userdata, 'is_passive_mode', False)
+    async def _logged_say(self, message: str, allow_interruptions: bool = True):
+        """Wrapper for session.say that logs all outgoing messages and handles TTS suppression"""
         session_id = getattr(self.session.userdata, 'session_id', 'unknown')
-        
-        # Comprehensive STT logging with session tracking
-        transcript_text = new_message.text_content or ""
-        logger.info(f"[STT INPUT] Session: {session_id} | Passive: {is_passive_mode} | Text: '{transcript_text}'")
-        print(f"[CONVERSATION LOG] Session: {session_id} | USER INPUT: '{transcript_text}'")
+        logger.info(f"[LLM OUTPUT] Session: {session_id} | Text: '{message}'")
+        print(f"[CONVERSATION LOG] Session: {session_id} | MAYA OUTPUT: '{message}'")
         
         # Store conversation in Redis
-        if transcript_text.strip():  # Only log non-empty messages
-            self._log_conversation_message(session_id, "user", transcript_text)
+        self._log_conversation_message(session_id, "assistant", message)
         
-        if is_passive_mode:
-            # Heuristically capture instructions first
-            if transcript_text.strip():
-                self._maybe_collect_instruction_from_transcript(transcript_text)
-            # Explicit exit detection before any generation
-            if transcript_text.strip() and self._should_exit_passive_mode(transcript_text):
-                logger.info(f"[EXIT DETECTION] Session: {session_id} | Exit signal detected: '{transcript_text[:50]}...'")
-                print(f"[EXIT DETECTION] Passive mode exit triggered by: '{transcript_text}'")
-                # Exit passive mode immediately
-                self.session.userdata.is_passive_mode = False
-                self._tts_suppressed = False  # Re-enable TTS for exit response
-                # Provide summary
-                await self._exit_passive_mode_and_summarize()
-                # Prevent default LLM reply for this turn
-                raise StopResponse()
-            else:
-                # Continue passive mode - prevent any LLM speech for this turn
-                self._tts_suppressed = True
-                logger.debug(f"[PASSIVE STATE] Session: {session_id} | Continuing passive mode - suppressing speech")
-                print(f"[DEBUG] Passive mode continues: '{transcript_text}' - suppressing automatic reply")
-                # Stop the default pipeline from generating a reply
-                raise StopResponse()
-        else:
-            # Normal mode - enable TTS
-            self._tts_suppressed = False
+        # Check if TTS should be suppressed during passive mode
+        if self._tts_suppressed:
+            logger.info(f"[TTS SUPPRESSED] Session: {session_id} | Passive mode - message logged but not spoken: '{message}'")
+            print(f"[TTS SUPPRESSED] Session: {session_id} | PASSIVE MODE: '{message}'")
+            return None  # Suppress TTS output
+        
+        # Call original say method for normal speech
+        return await self._original_say(message, allow_interruptions=allow_interruptions)
+
+    async def _logged_generate_reply(self, *args, **kwargs):
+        """Wrapper for session.generate_reply that logs responses"""
+        # Call original generate_reply method and capture response
+        response = await self._original_generate_reply(*args, **kwargs)
+        
+        # Log the generated response if available
+        if hasattr(response, 'text_content') and response.text_content:
+            session_id = getattr(self.session.userdata, 'session_id', 'unknown')
+            logger.info(f"[LLM GENERATE_REPLY] Session: {session_id} | Text: '{response.text_content}'")
+            print(f"[CONVERSATION LOG] Session: {session_id} | MAYA GENERATE_REPLY: '{response.text_content}'")
             
-        # Let the LLM process the input normally (no StopResponse)
-        # This allows tool calls like collect_instruction and intelligent exit detection
+            # Store conversation in Redis
+            self._log_conversation_message(session_id, "assistant", response.text_content)
+        
+        return response
+
+    async def _passive_openai_analysis(self, session_id: str, transcript_text: str) -> None:
+        """Async stub that calls OpenAI for passive-mode analysis without speaking.
+        This is intentionally non-blocking and logs the model's brief classification or summary.
+        """
+        if self._openai_client is None:
+            return
+        try:
+            # Keep it tiny & fast: one short response
+            prompt = (
+                "You are analyzing a clinician-patient conversation during passive listening. "
+                "Briefly classify this utterance (<= 12 words) as one of: instruction | question | chit-chat | other. "
+                "Then, if it is clearly a discharge instruction, produce a compact instruction candidate; otherwise say 'none'.\n\n"
+                f"Utterance: {transcript_text}"
+            )
+            resp = await self._openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=40,
+                temperature=0.2,
+            )
+            content = resp.choices[0].message.content if resp and resp.choices else ""
+            if content:
+                logger.info(f"[PASSIVE ANALYSIS] Session: {session_id} | {content}")
+        except Exception as e:
+            logger.error(f"[PASSIVE ANALYSIS] OpenAI call failed: {e}")
 
 
 # Console entrypoint
