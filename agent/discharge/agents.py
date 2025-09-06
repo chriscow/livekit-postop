@@ -120,9 +120,10 @@ from livekit.plugins import hume
 
 # Health check endpoint is handled by `agent/main.py`
 # Import configuration and utilities
-from .config import AGENT_NAME, LIVEKIT_AGENT_NAME, POSTOP_VOICE_ID
+from .config import AGENT_NAME, LIVEKIT_AGENT_NAME, POSTOP_VOICE_ID, GMAIL_USERNAME, GMAIL_APP_PASSWORD, SUMMARY_EMAIL_RECIPIENT
 # Removed unused imports
 from shared import RedisMemory, prompt_manager
+from shared.email_service import send_instruction_summary_email
 
 logger = logging.getLogger("postop-agent")
 
@@ -185,7 +186,8 @@ class DischargeAgent(Agent):
             "On exit (triggered by name or completion phrase):\n"
             "1. Provide concise bullet list of ONLY captured instructions (merged into complete lines; no filler numbers if none captured).\n"
             "2. Ask once if anything is missing or needs correction (<= 1 short sentence).\n"
-            "3. Do NOT say you will now listen quietly again.\n\n"
+            "3. Do NOT say you will now listen quietly again.\n"
+            "4. After the doctor confirms instructions are complete and correct, call send_instruction_summary_email to send the summary via email.\n\n"
             "If answering a direct question (outside passive): concise (<=2 sentences), medically accurate.\n"
             "Never invent an instruction; if uncertain, ask for clarification instead of guessing.\n\n"
             "CRITICAL PASSIVE MODE RULES:\n"
@@ -212,7 +214,13 @@ class DischargeAgent(Agent):
             "🔴 HIGH: \"Any questions?\", \"That's all\", \"We're done\" - Exit immediately  \n"
             "🟡 MEDIUM: Social closings after instructions - Exit if instructions were given\n"
             "🟢 LOW: Verification requests - Exit and provide summary\n"
-            "Remember: It's better to exit early when addressed than to miss an exit signal!"
+            "Remember: It's better to exit early when addressed than to miss an exit signal!\n\n"
+            "EMAIL SENDING WORKFLOW:\n"
+            "After providing the instruction summary, listen for confirmation signals:\n"
+            "- \"That's correct\", \"Yes, that's right\", \"That looks good\", \"Perfect\", \"Exactly\"\n"
+            "- \"That's everything\", \"That's complete\", \"Nothing to add\", \"All set\"\n"
+            "When you receive confirmation, IMMEDIATELY call send_instruction_summary_email.\n"
+            "Do NOT send email until you have explicit confirmation from the doctor."
         )
 
         if is_console_mode():
@@ -341,12 +349,33 @@ class DischargeAgent(Agent):
             instruction_type: Type of instruction (medication, activity, followup, warning, etc.)
         """
         from datetime import datetime
+        
+        # Check for near-duplicates before adding
+        session_id = getattr(ctx.userdata, 'session_id', 'unknown')
+        cleaned_text = instruction_text.strip()
+        
+        # Log the instruction being collected
+        logger.info(f"[COLLECT] Session: {session_id} | Collecting: '{cleaned_text}'")
+        
+        # Check for duplicates
+        existing_instructions = getattr(ctx.userdata, 'collected_instructions', [])
+        for i, existing in enumerate(existing_instructions):
+            existing_text = existing.get("text", "").strip() if isinstance(existing, dict) else str(existing).strip()
+            # Compare ignoring punctuation and case
+            if cleaned_text.lower().rstrip('.') == existing_text.lower().rstrip('.'):
+                logger.warning(f"[COLLECT] Session: {session_id} | Duplicate detected! Skipping: '{cleaned_text}' (matches #{i+1}: '{existing_text}')")
+                # Return silently without adding duplicate
+                if ctx.userdata.workflow_mode == "passive_listening" and ctx.userdata.is_passive_mode:
+                    return None, None  # Silent collection
+                else:
+                    return None, "I've already noted that instruction."
+        
         entry = {
-            "text": instruction_text.strip(),
+            "text": cleaned_text,
             "timestamp": datetime.now().isoformat()
         }
         ctx.userdata.collected_instructions.append(entry)
-        logger.info(f"Collected instruction: {entry['text'][:60]}...")
+        logger.info(f"[COLLECT] Session: {session_id} | Successfully collected instruction #{len(ctx.userdata.collected_instructions)}: '{entry['text'][:60]}...'")
         
         # Stay silent in passive mode unless directly asked
         if ctx.userdata.workflow_mode == "passive_listening" and ctx.userdata.is_passive_mode:
@@ -470,6 +499,91 @@ class DischargeAgent(Agent):
         
         return "Exited passive listening mode and provided summary"
 
+    @function_tool
+    async def send_instruction_summary_email(self, ctx: RunContext[SessionData]):
+        """
+        Send the confirmed instruction summary via email as SMS-formatted message.
+        
+        Call this function ONLY after the doctor has confirmed that the instruction 
+        summary is complete and correct. This will send the summary to the configured
+        email address for further processing or SMS delivery.
+        
+        DO NOT call this function until you have received explicit confirmation
+        that the instructions are accurate and complete.
+        """
+        session_id = getattr(ctx.userdata, 'session_id', 'unknown')
+        patient_name = getattr(ctx.userdata, 'patient_name', None)
+        
+        logger.info(f"[EMAIL] Session: {session_id} | Attempting to send instruction summary email")
+        
+        # Check if email is configured
+        if not GMAIL_USERNAME or not GMAIL_APP_PASSWORD or not SUMMARY_EMAIL_RECIPIENT:
+            error_msg = "Email not configured - missing Gmail credentials or recipient"
+            logger.warning(f"[EMAIL] Session: {session_id} | {error_msg}")
+            return f"Email sending is not configured. {error_msg}"
+        
+        # Get collected instructions and deduplicate them (same logic as provide_instruction_summary)
+        raw_instructions = getattr(ctx.userdata, 'collected_instructions', [])
+        logger.debug(f"[EMAIL] Session: {session_id} | Raw instruction count: {len(raw_instructions)}")
+        
+        if not raw_instructions:
+            logger.warning(f"[EMAIL] Session: {session_id} | No instructions found to send")
+            return "No instructions available to send via email"
+        
+        # Log raw instructions for debugging
+        for i, instr in enumerate(raw_instructions):
+            if isinstance(instr, dict):
+                text = instr.get("text", "").strip()
+            else:
+                text = str(instr).strip()
+            logger.debug(f"[EMAIL] Session: {session_id} | Raw instruction {i+1}: '{text}'")
+        
+        # Deduplicate instructions (same logic as provide_instruction_summary)
+        normalized = []
+        for item in raw_instructions:
+            if not item:
+                continue
+            if isinstance(item, dict):
+                text = (item.get("text") or "").strip()
+            else:
+                text = str(item).strip()
+            if text:
+                normalized.append({"text": text})
+        
+        # De-duplicate by lowercase text preserving order
+        seen = set()
+        instructions = []
+        for item in normalized:
+            text = item["text"]
+            key = text.lower().rstrip('.')  # Remove trailing period for comparison
+            if key not in seen:
+                seen.add(key)
+                instructions.append(item)
+        
+        logger.info(f"[EMAIL] Session: {session_id} | Deduplicated instruction count: {len(instructions)} (was {len(raw_instructions)})")
+        for i, instr in enumerate(instructions):
+            logger.debug(f"[EMAIL] Session: {session_id} | Final instruction {i+1}: '{instr['text']}'")
+        
+        if not instructions:
+            logger.warning(f"[EMAIL] Session: {session_id} | No valid instructions after deduplication")
+            return "No valid instructions available to send via email"
+        
+        # Send the email
+        success, message = send_instruction_summary_email(
+            instructions=instructions,
+            patient_name=patient_name,
+            session_id=session_id,
+            gmail_username=GMAIL_USERNAME,
+            gmail_app_password=GMAIL_APP_PASSWORD,
+            recipient_email=SUMMARY_EMAIL_RECIPIENT
+        )
+        
+        if success:
+            logger.info(f"[EMAIL] Session: {session_id} | Email sent successfully")
+            return f"✅ Instruction summary sent via email to {SUMMARY_EMAIL_RECIPIENT}"
+        else:
+            logger.error(f"[EMAIL] Session: {session_id} | Email failed: {message}")
+            return f"❌ Failed to send email: {message}"
 
     def _is_maya_directly_addressed(self, message_lower: str) -> bool:
         """

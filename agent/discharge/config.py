@@ -38,3 +38,21 @@ CONSOLE_TEST_PHONE = "(425) 829-5443"  # Hardcoded phone for console testing
 # Redis Configuration
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
 logger.info(f"Redis URL configured: {REDIS_URL[:50]}..." if REDIS_URL.startswith('redis://') else f"Redis URL: {REDIS_URL}")
+
+# Email Configuration for Instruction Summaries
+GMAIL_SMTP_SERVER = "smtp.gmail.com"
+GMAIL_SMTP_PORT = 587
+GMAIL_USERNAME = os.getenv('GMAIL_USERNAME')  # Gmail account email
+GMAIL_APP_PASSWORD = os.getenv('GMAIL_APP_PASSWORD')  # Gmail app password (not regular password)
+SUMMARY_EMAIL_RECIPIENT = os.getenv('SUMMARY_EMAIL_RECIPIENT')  # Target email address for summaries
+
+# Log email configuration status (without exposing credentials)
+if GMAIL_USERNAME and GMAIL_APP_PASSWORD and SUMMARY_EMAIL_RECIPIENT:
+    logger.info(f"Email configuration complete - Gmail user: {GMAIL_USERNAME}, Recipient: {SUMMARY_EMAIL_RECIPIENT}")
+else:
+    missing = []
+    if not GMAIL_USERNAME: missing.append("GMAIL_USERNAME")
+    if not GMAIL_APP_PASSWORD: missing.append("GMAIL_APP_PASSWORD") 
+    if not SUMMARY_EMAIL_RECIPIENT: missing.append("SUMMARY_EMAIL_RECIPIENT")
+    logger.info(f"Email configuration incomplete - Missing: {', '.join(missing)}")
+    logger.info("Email functionality will be disabled until all email environment variables are set")
