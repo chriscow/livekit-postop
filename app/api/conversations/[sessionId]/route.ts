@@ -86,3 +86,36 @@ export async function GET(
     return NextResponse.json({ error: 'Failed to fetch conversation details' }, { status: 500 });
   }
 }
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ sessionId: string }> }
+) {
+  try {
+    const { sessionId } = await params;
+    const redis = await getRedisClient();
+
+    const conversationKey = `postop:conversations:${sessionId}`;
+    const sessionsSetKey = 'postop:conversations:sessions';
+
+    // Check if conversation exists
+    const messageCount = await redis.lLen(conversationKey);
+    if (messageCount === 0) {
+      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+    }
+
+    // Delete the conversation messages and remove from sessions set
+    const pipeline = redis.multi();
+    pipeline.del(conversationKey);
+    pipeline.sRem(sessionsSetKey, sessionId);
+    await pipeline.exec();
+
+    return NextResponse.json({
+      message: 'Conversation deleted successfully',
+      sessionId,
+    });
+  } catch (error) {
+    console.error('Failed to delete conversation:', error);
+    return NextResponse.json({ error: 'Failed to delete conversation' }, { status: 500 });
+  }
+}

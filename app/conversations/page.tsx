@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { toast } from 'sonner';
+import { TrashIcon } from '@phosphor-icons/react/dist/ssr';
 import { Button } from '@/components/ui/button';
 
 type ConversationSummary = {
@@ -17,6 +19,7 @@ export default function ConversationsPage() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     async function fetchConversations() {
@@ -48,6 +51,41 @@ export default function ConversationsPage() {
     const minutes = Math.floor(duration / 60);
     const seconds = duration % 60;
     return `${minutes}m ${seconds}s`;
+  };
+
+  const handleDeleteConversation = async (sessionId: string) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to delete conversation ${sessionId}? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingIds((prev) => new Set(prev).add(sessionId));
+
+    try {
+      const response = await fetch(`/api/conversations/${sessionId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to delete conversation');
+      }
+
+      // Remove from local state optimistically
+      setConversations((prev) => prev.filter((conv) => conv.sessionId !== sessionId));
+      toast.success(`Conversation ${sessionId} deleted successfully`);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to delete conversation';
+      toast.error(errorMessage);
+      console.error('Delete error:', err);
+    } finally {
+      setDeletingIds((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(sessionId);
+        return newSet;
+      });
+    }
   };
 
   if (loading) {
@@ -140,6 +178,19 @@ export default function ConversationsPage() {
                     <Link href={`/conversations/${conversation.sessionId}`}>
                       View Full Conversation
                     </Link>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => handleDeleteConversation(conversation.sessionId)}
+                    disabled={deletingIds.has(conversation.sessionId)}
+                    className="px-2"
+                  >
+                    {deletingIds.has(conversation.sessionId) ? (
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    ) : (
+                      <TrashIcon size={16} />
+                    )}
                   </Button>
                 </div>
               </div>
