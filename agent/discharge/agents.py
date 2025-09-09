@@ -127,6 +127,8 @@ from shared.email_service import send_instruction_summary_email
 
 logger = logging.getLogger("postop-agent")
 
+HEALTHCARE_PROVIDER_NAME = os.getenv("HEALTHCARE_PROVIDER_NAME", "Dr. Shah")
+
 
 def is_console_mode():
     """Check if running in console mode"""
@@ -168,9 +170,13 @@ class DischargeAgent(Agent):
         instructions = (
             "You are Maya, an AI discharge assistant.\n"
             "GOAL: Capture ONLY true discharge instructions while in passive mode; ignore filler.\n\n"
-            "Step by step instructions:\n"
-            "1. Briefly introduce yourself and ask who is present in the room, then call start_passive_listening.\n"
-            "2. Silently capture instructions.\n\n"
+            "MANDATORY SEQUENTIAL STEPS - DO NOT SKIP ANY:\n"
+            "1. Briefly introduce yourself and ask who is present in the room.\n"
+            "2. LISTEN CAREFULLY: When the doctor introduces the patient (e.g., 'This is Neil', 'We have Sarah here'), IMMEDIATELY call store_patient_name with that name. DO NOT ask for the name again.\n"
+            "3. REQUIRED: Ask about the patient's preferred language. If not English, call store_patient_language.\n"
+            "4. ONLY AFTER steps 2 and 3 are complete: call start_passive_listening.\n"
+            "5. Then silently capture instructions.\n\n"
+            "CRITICAL: Extract the patient name from the doctor's introduction. Do NOT ask 'what name would you like to be called' - just use what the doctor said!\n\n"
             "Capture IF the utterance conveys actual medical guidance (examples):\n"
             "- Medication: name, dose, frequency, route, duration (\"Take two Tylenol every four hours for pain\")\n"
             "- Activity / mobility restrictions (\"No heavy lifting for two weeks\")\n"
@@ -281,8 +287,8 @@ class DischargeAgent(Agent):
                     logger.info(f"[on_conversation_item_added] Session: {session_id} | Role: {event.item.role} | Text: '{response_text}'")
                     print(f"[on_conversation_item_added] Session: {session_id} | Role: {event.item.role} | Text: '{response_text}'")
                     # Avoid writing to Redis here to prevent duplicates; wrappers handle persistence.
-        
-        await self.session.say("Hi all! I'm Maya, thanks for dialing me in today. So Dr. Shah, who do we have in the room today?", allow_interruptions=False)
+
+        await self.session.say(f"Hi all! I'm Maya, thanks for dialing me in today. So {HEALTHCARE_PROVIDER_NAME}, who do we have in the room today?", allow_interruptions=False)
 
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         """Handle user speech completion with exit detection and TTS suppression during passive mode"""
@@ -299,6 +305,71 @@ class DischargeAgent(Agent):
         if transcript_text.strip():  # Only log non-empty messages
             self._log_conversation_message(session_id, "user", transcript_text)
         
+
+    @function_tool
+    async def store_patient_name(self, ctx: RunContext[SessionData], patient_name: str):
+        """
+        Store the patient's name for personalized communication. Can be first name only or full name.
+        
+        Args:
+            patient_name: Patient's name (e.g., 'John', 'Maria', 'John Smith', etc.)
+        """
+        # Clean and validate the name
+        cleaned_name = patient_name.strip()
+        # if not cleaned_name:
+        #     return None, "Please provide the patient's name."
+            
+        # Store the patient name (whatever form was provided)
+        ctx.userdata.patient_name = cleaned_name
+        
+        session_id = getattr(ctx.userdata, 'session_id', 'unknown')
+        logger.info(f"[PATIENT SETUP] Session: {session_id} | Patient name set to: {ctx.userdata.patient_name}")
+        
+        # Store in memory for persistence
+        self.memory.store_session_data(ctx.userdata.session_id, "patient_name", ctx.userdata.patient_name)
+        
+        return None, f"Perfect, I'll be helping {cleaned_name} today."
+
+    @function_tool
+    async def store_patient_language(self, ctx: RunContext[SessionData], language: str):
+        """
+        Store the patient's preferred language for discharge instructions and communication.
+        
+        Args:
+            language: Patient's preferred language (e.g., 'English', 'Spanish', 'Portuguese', etc.)
+        """
+        # Normalize the language name
+        supported_languages = {
+            'english': 'English',
+            'spanish': 'Spanish', 
+            'portuguese': 'Portuguese',
+            'french': 'French',
+            'german': 'German',
+            'italian': 'Italian',
+            'dutch': 'Dutch',
+            'russian': 'Russian',
+            'arabic': 'Arabic',
+            'chinese': 'Chinese',
+            'japanese': 'Japanese'
+        }
+        
+        normalized_language = language.lower().strip()
+        if normalized_language in supported_languages:
+            ctx.userdata.patient_language = supported_languages[normalized_language]
+        else:
+            # Default to English if language not supported
+            ctx.userdata.patient_language = 'English'
+            
+        session_id = getattr(ctx.userdata, 'session_id', 'unknown')
+        logger.info(f"[PATIENT SETUP] Session: {session_id} | Patient language set to: {ctx.userdata.patient_language}")
+        
+        # Store in memory for persistence
+        self.memory.store_session_data(ctx.userdata.session_id, "patient_language", ctx.userdata.patient_language)
+        
+        if ctx.userdata.patient_language != 'English':
+            return None, f"I've noted that {ctx.userdata.patient_name or 'the patient'} prefers {ctx.userdata.patient_language}. I'll provide the final summary in their native language."
+        else:
+            return None, f"I've noted that {ctx.userdata.patient_name or 'the patient'} prefers English for their discharge instructions."
 
     @function_tool
     async def collect_instruction(self, ctx: RunContext[SessionData], instruction_text: str):
@@ -347,7 +418,19 @@ class DischargeAgent(Agent):
     # Workflow Transition Functions
     @function_tool
     async def start_passive_listening(self, ctx: RunContext[SessionData]):
-        """Enter passive listening mode for instruction collection"""
+        """Enter passive listening mode for instruction collection. 
+        
+        IMPORTANT: Only call this AFTER patient name and language have been captured."""
+        
+        # Check if patient name has been captured
+        if not ctx.userdata.patient_name:
+            return None, "Please capture the patient's name first using store_patient_name."
+        
+        # Patient language defaults to English if not set
+        if not ctx.userdata.patient_language:
+            ctx.userdata.patient_language = 'English'
+            logger.info(f"[PATIENT SETUP] Defaulting to English for session: {ctx.userdata.session_id}")
+        
         ctx.userdata.workflow_mode = "passive_listening"
         ctx.userdata.is_passive_mode = True
         logger.info(f"Entering passive listening mode for session: {ctx.userdata.session_id}")
@@ -355,8 +438,30 @@ class DischargeAgent(Agent):
         # Also store in memory for persistence
         self.memory.store_session_data(ctx.userdata.session_id, "workflow_mode", "passive_listening")
         self.memory.store_session_data(ctx.userdata.session_id, "is_passive_mode", True)
+
+        # await self.session.generate_reply(instructions=f"Thank {HEALTHCARE_PROVIDER_NAME} and greet the other people in the room by name. Then let everyone know that you will listen quietly while {HEALTHCARE_PROVIDER_NAME} gives {ctx.userdata.patient_name}'s discharge instructions.")
+        patient_language = getattr(ctx.userdata, 'patient_language', 'English')
         
-        await self.session.generate_reply(instructions=f"Thank Dr. Shah and greet the other people in the room by name. Then let everyone know that you will listen quietly while Dr. Shah gives {ctx.userdata.patient_name}'s discharge instructions.")
+        prompt = f"""
+First, please say in English:
+"Thanks for letting me know {HEALTHCARE_PROVIDER_NAME}."
+
+Then say in {patient_language}: 
+"{ctx.userdata.patient_name}, it's a pleasure to meet you. My goal is to make
+your at-home recovery as smooth as possible. I work closely with
+{HEALTHCARE_PROVIDER_NAME}'s office to understand your surgery and recovery
+protocol. I'm going to listen quietely to capture today's discharge instructions
+and text you a summary afterwards. Over the next few days, I'll also check in on
+how you're doing and send you key reminders for things like medication and wound
+care. If you have any questions while you're recovering at home, feel free to
+text or call me anytime, I'm here 24/7 as your personal recovery assistant."
+
+Then in English say: 
+"Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal recap
+at the end to make sure I've noted everything correctly for {ctx.userdata.patient_name}."
+            """
+
+        await self.session.generate_reply(instructions=prompt, allow_interruptions=False)
 
         # Mute audio output while in passive mode (prevent any TTS playback)
         try:
@@ -456,7 +561,28 @@ class DischargeAgent(Agent):
         logger.debug(f"[WORKFLOW] Session: {session_id} | Deterministic exit summary prepared")
         
         # Send deterministic summary first to avoid LLM drifting back into passive intro
-        await ctx.session.generate_reply(f"Here are the discharge instructions you captured:\n{summary_block}\nIf you didn't capture any, let them know. Ask them to let you know if something should be added or corrected.")
+        await ctx.session.generate_reply(instructions=f"""
+Here are the discharge instructions you captured:\n{summary_block}
+
+If you didn't capture any, let them know in English. 
+
+
+
+
+In English, read off the discharge instructions in this general structure:
+"Okay, here's what I captured.
+
+First, XXX
+Second, XXX
+And Finally, XXX
+
+Does that sound right?"
+
+The Patient's name is {ctx.userdata.patient_name or 'the patient'} and their native language is {ctx.userdata.patient_language or 'English'}.
+
+If the patient's native language is not English, ask {HEALTHCARE_PROVIDER_NAME} 
+if they would like you to repeat the instructions in {ctx.userdata.patient_language or 'English'}.
+""")
         
         return "Exited passive listening mode and provided summary"
 
@@ -530,18 +656,50 @@ class DischargeAgent(Agent):
             return "No valid instructions available to send via email"
         
         # Send the email
+        patient_language = getattr(ctx.userdata, 'patient_language', 'English')
         success, message = send_instruction_summary_email(
             instructions=instructions,
             patient_name=patient_name,
             session_id=session_id,
             gmail_username=GMAIL_USERNAME,
             gmail_app_password=GMAIL_APP_PASSWORD,
-            recipient_email=SUMMARY_EMAIL_RECIPIENT
+            recipient_email=SUMMARY_EMAIL_RECIPIENT,
+            patient_language=patient_language
         )
+
         
         if success:
             logger.info(f"[EMAIL] Session: {session_id} | Email sent successfully")
-            return f"✅ Instruction summary sent via email to {SUMMARY_EMAIL_RECIPIENT}"
+
+            patient_language = getattr(ctx.userdata, 'patient_language', 'English')
+            
+            if patient_language != 'English':
+                prompt = f"""
+First say in English: "Thanks for confirming." 
+
+Then in the patient's native language ({patient_language}) say:
+
+"{patient_name}, like I mentioned before, I'll send a summary to
+your email now for reference, and check-in on you over the next few days. If you
+have any questions, I'm only a text or phone call away."
+
+Then in English say:
+"If you need anything else, let me know. Otherwise feel free to hang up."
+                """
+            else:
+                prompt = f"""
+Thanks for confirming. 
+
+{patient_name}, like I mentioned before, I'll send a summary to
+your email now for reference, and check-in on you over the next few days. If you
+have any questions, I'm only a text or phone call away.
+
+If you need anything else, let me know. Otherwise feel free to hang up.
+                """
+
+            await self.session.generate_reply(prompt, allow_interruptions=False)
+
+            return None
         else:
             logger.error(f"[EMAIL] Session: {session_id} | Email failed: {message}")
             return f"❌ Failed to send email: {message}"

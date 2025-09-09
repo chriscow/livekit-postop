@@ -10,14 +10,58 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import List, Dict, Optional
+import os
 
 logger = logging.getLogger("postop-agent")
+
+
+def _translate_text_with_openai(text: str, target_language: str) -> Optional[str]:
+    """
+    Translate text to target language using OpenAI API
+    
+    Args:
+        text: English text to translate
+        target_language: Target language (e.g., 'Spanish', 'French')
+        
+    Returns:
+        Translated text or None if translation fails
+    """
+    try:
+        import openai
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        prompt = f"""Translate the following medical discharge summary from English to {target_language}. 
+        Maintain medical accuracy and use patient-friendly language. Keep the same format and structure:
+
+        {text}"""
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a medical translator specializing in discharge instructions. Translate accurately while using patient-friendly language."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1000,
+            temperature=0.1
+        )
+        
+        if response.choices and response.choices[0].message:
+            return response.choices[0].message.content.strip()
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"OpenAI translation error: {e}")
+        return None
 
 
 def format_summary_for_sms(
     instructions: List[Dict], 
     patient_name: Optional[str] = None,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    patient_language: Optional[str] = None
 ) -> str:
     """
     Format instruction summary for SMS-style delivery (concise, clear format)
@@ -26,6 +70,7 @@ def format_summary_for_sms(
         instructions: List of instruction dictionaries with 'text' field
         patient_name: Patient's name to include in summary
         session_id: Session ID for tracking
+        patient_language: Patient's preferred language for the summary
         
     Returns:
         SMS-formatted string suitable for text messaging
@@ -33,11 +78,32 @@ def format_summary_for_sms(
     
     # Header with patient name and timestamp
     timestamp = datetime.now().strftime("%m/%d %I:%M%p")
-    header = f"Discharge Summary - {patient_name or 'Patient'} ({timestamp})"
+    
+    # Determine if translation is needed
+    needs_translation = patient_language and patient_language.lower() != 'english'
+    
+    # Create base content in English first
+    if needs_translation:
+        header = f"Discharge Summary - {patient_name or 'Patient'} ({timestamp})"
+        no_instructions_msg = "No discharge instructions were captured during this session."
+        footer_msg = "Questions? Call your healthcare provider."
+    else:
+        header = f"Discharge Summary - {patient_name or 'Patient'} ({timestamp})"
+        no_instructions_msg = "No discharge instructions were captured during this session."  
+        footer_msg = "Questions? Call your healthcare provider."
     
     # Handle no instructions case
     if not instructions or len(instructions) == 0:
-        return f"{header}\n\nNo discharge instructions were captured during this session."
+        base_message = f"{header}\n\n{no_instructions_msg}"
+        
+        if needs_translation:
+            try:
+                translated_message = _translate_text_with_openai(base_message, patient_language)
+                return translated_message if translated_message else base_message
+            except Exception as e:
+                logger.error(f"Translation failed: {e}")
+                return base_message
+        return base_message
     
     # Build concise instruction list
     formatted_lines = [header, ""]
@@ -56,10 +122,19 @@ def format_summary_for_sms(
     
     # Add footer
     formatted_lines.append("")
-    formatted_lines.append("Questions? Call your healthcare provider.")
+    formatted_lines.append(footer_msg)
     
     # Join with newlines and ensure total length is reasonable for SMS gateways
     full_message = "\n".join(formatted_lines)
+    
+    # Translate if needed
+    if needs_translation:
+        try:
+            translated_message = _translate_text_with_openai(full_message, patient_language)
+            full_message = translated_message if translated_message else full_message
+        except Exception as e:
+            logger.error(f"Translation failed: {e}")
+            # Continue with English version if translation fails
     
     # Log message length for monitoring
     logger.debug(f"SMS-formatted summary length: {len(full_message)} characters")
@@ -74,6 +149,7 @@ def send_instruction_summary_email(
     gmail_username: Optional[str] = None,
     gmail_app_password: Optional[str] = None,
     recipient_email: Optional[str] = None,
+    patient_language: Optional[str] = None,
     smtp_server: str = "smtp.gmail.com",
     smtp_port: int = 587
 ) -> tuple[bool, str]:
@@ -87,6 +163,7 @@ def send_instruction_summary_email(
         gmail_username: Gmail account username
         gmail_app_password: Gmail app password (not regular password)
         recipient_email: Email address to send summary to
+        patient_language: Patient's preferred language for the summary
         smtp_server: SMTP server (default: smtp.gmail.com)
         smtp_port: SMTP port (default: 587)
         
@@ -102,7 +179,7 @@ def send_instruction_summary_email(
     
     try:
         # Format the summary for SMS
-        sms_content = format_summary_for_sms(instructions, patient_name, session_id)
+        sms_content = format_summary_for_sms(instructions, patient_name, session_id, patient_language)
         
         # Create email message
         msg = MIMEMultipart('alternative')
@@ -185,6 +262,7 @@ def test_email_configuration(
         gmail_username=gmail_username,
         gmail_app_password=gmail_app_password,
         recipient_email=recipient_email,
+        patient_language="English",
         smtp_server=smtp_server,
         smtp_port=smtp_port
     )
