@@ -170,13 +170,10 @@ class DischargeAgent(Agent):
         instructions = (
             "You are Maya, an AI discharge assistant.\n"
             "GOAL: Capture ONLY true discharge instructions while in passive mode; ignore filler.\n\n"
-            "MANDATORY SEQUENTIAL STEPS - DO NOT SKIP ANY:\n"
+            "SIMPLE WORKFLOW:\n"
             "1. Briefly introduce yourself and ask who is present in the room.\n"
-            "2. LISTEN CAREFULLY: When the doctor introduces the patient (e.g., 'This is Neil', 'We have Sarah here'), IMMEDIATELY call store_patient_name with that name. DO NOT ask for the name again.\n"
-            "3. REQUIRED: Ask about the patient's preferred language. If not English, call store_patient_language.\n"
-            "4. ONLY AFTER steps 2 and 3 are complete: call start_passive_listening.\n"
-            "5. Then silently capture instructions.\n\n"
-            "CRITICAL: Extract the patient name from the doctor's introduction. Do NOT ask 'what name would you like to be called' - just use what the doctor said!\n\n"
+            "2. When the doctor responds, immediately call start_passive_listening.\n"
+            "3. Then silently capture discharge instructions.\n\n"
             "Capture IF the utterance conveys actual medical guidance (examples):\n"
             "- Medication: name, dose, frequency, route, duration (\"Take two Tylenol every four hours for pain\")\n"
             "- Activity / mobility restrictions (\"No heavy lifting for two weeks\")\n"
@@ -229,13 +226,15 @@ class DischargeAgent(Agent):
             "Do NOT send email until you have explicit confirmation from the doctor."
         )
 
-        if is_console_mode():
-            tts = openai.TTS(voice="shimmer")
-        else:
-            tts = hume.TTS(
-                voice=hume.VoiceById(id=POSTOP_VOICE_ID),
-                description="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother."
-            )
+        tts = openai.TTS(voice="shimmer", instructions="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother.")
+
+        # if is_console_mode():
+        #     tts = openai.TTS(voice="shimmer")
+        # else:
+        #     tts = hume.TTS(
+        #         voice=hume.VoiceById(id=POSTOP_VOICE_ID),
+        #         description="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother."
+        #     )
 
         super().__init__(
             instructions=instructions,
@@ -305,71 +304,11 @@ class DischargeAgent(Agent):
         if transcript_text.strip():  # Only log non-empty messages
             self._log_conversation_message(session_id, "user", transcript_text)
         
+        # Extract patient info quietly in the background (only once)
+        if not getattr(self.session.userdata, 'patient_info_extracted', False):
+            self._extract_patient_info_quietly(transcript_text, session_id)
+        
 
-    @function_tool
-    async def store_patient_name(self, ctx: RunContext[SessionData], patient_name: str):
-        """
-        Store the patient's name for personalized communication. Can be first name only or full name.
-        
-        Args:
-            patient_name: Patient's name (e.g., 'John', 'Maria', 'John Smith', etc.)
-        """
-        # Clean and validate the name
-        cleaned_name = patient_name.strip()
-        # if not cleaned_name:
-        #     return None, "Please provide the patient's name."
-            
-        # Store the patient name (whatever form was provided)
-        ctx.userdata.patient_name = cleaned_name
-        
-        session_id = getattr(ctx.userdata, 'session_id', 'unknown')
-        logger.info(f"[PATIENT SETUP] Session: {session_id} | Patient name set to: {ctx.userdata.patient_name}")
-        
-        # Store in memory for persistence
-        self.memory.store_session_data(ctx.userdata.session_id, "patient_name", ctx.userdata.patient_name)
-        
-        return None, f"Perfect, I'll be helping {cleaned_name} today."
-
-    @function_tool
-    async def store_patient_language(self, ctx: RunContext[SessionData], language: str):
-        """
-        Store the patient's preferred language for discharge instructions and communication.
-        
-        Args:
-            language: Patient's preferred language (e.g., 'English', 'Spanish', 'Portuguese', etc.)
-        """
-        # Normalize the language name
-        supported_languages = {
-            'english': 'English',
-            'spanish': 'Spanish', 
-            'portuguese': 'Portuguese',
-            'french': 'French',
-            'german': 'German',
-            'italian': 'Italian',
-            'dutch': 'Dutch',
-            'russian': 'Russian',
-            'arabic': 'Arabic',
-            'chinese': 'Chinese',
-            'japanese': 'Japanese'
-        }
-        
-        normalized_language = language.lower().strip()
-        if normalized_language in supported_languages:
-            ctx.userdata.patient_language = supported_languages[normalized_language]
-        else:
-            # Default to English if language not supported
-            ctx.userdata.patient_language = 'English'
-            
-        session_id = getattr(ctx.userdata, 'session_id', 'unknown')
-        logger.info(f"[PATIENT SETUP] Session: {session_id} | Patient language set to: {ctx.userdata.patient_language}")
-        
-        # Store in memory for persistence
-        self.memory.store_session_data(ctx.userdata.session_id, "patient_language", ctx.userdata.patient_language)
-        
-        if ctx.userdata.patient_language != 'English':
-            return None, f"I've noted that {ctx.userdata.patient_name or 'the patient'} prefers {ctx.userdata.patient_language}. I'll provide the final summary in their native language."
-        else:
-            return None, f"I've noted that {ctx.userdata.patient_name or 'the patient'} prefers English for their discharge instructions."
 
     @function_tool
     async def collect_instruction(self, ctx: RunContext[SessionData], instruction_text: str):
@@ -418,18 +357,7 @@ class DischargeAgent(Agent):
     # Workflow Transition Functions
     @function_tool
     async def start_passive_listening(self, ctx: RunContext[SessionData]):
-        """Enter passive listening mode for instruction collection. 
-        
-        IMPORTANT: Only call this AFTER patient name and language have been captured."""
-        
-        # Check if patient name has been captured
-        if not ctx.userdata.patient_name:
-            return None, "Please capture the patient's name first using store_patient_name."
-        
-        # Patient language defaults to English if not set
-        if not ctx.userdata.patient_language:
-            ctx.userdata.patient_language = 'English'
-            logger.info(f"[PATIENT SETUP] Defaulting to English for session: {ctx.userdata.session_id}")
+        """Enter passive listening mode for instruction collection."""
         
         ctx.userdata.workflow_mode = "passive_listening"
         ctx.userdata.is_passive_mode = True
@@ -439,14 +367,22 @@ class DischargeAgent(Agent):
         self.memory.store_session_data(ctx.userdata.session_id, "workflow_mode", "passive_listening")
         self.memory.store_session_data(ctx.userdata.session_id, "is_passive_mode", True)
 
-        # await self.session.generate_reply(instructions=f"Thank {HEALTHCARE_PROVIDER_NAME} and greet the other people in the room by name. Then let everyone know that you will listen quietly while {HEALTHCARE_PROVIDER_NAME} gives {ctx.userdata.patient_name}'s discharge instructions.")
-        patient_language = getattr(ctx.userdata, 'patient_language', 'English')
+        # Patient language defaults to English if not set
+        if not ctx.userdata.patient_language:
+            ctx.userdata.patient_language = 'English'
+            logger.info(f"[PATIENT SETUP] Defaulting to English for session: {ctx.userdata.session_id}")
         
-        prompt = f"""
-First, please say in English:
-"Thanks for letting me know {HEALTHCARE_PROVIDER_NAME}."
+        # Patient name defaults if not set
+        if not ctx.userdata.patient_name:
+            ctx.userdata.patient_name = 'the patient'
+            logger.info(f"[PATIENT SETUP] Defaulting patient name for session: {ctx.userdata.session_id}")
+        
+        patient_language = getattr(ctx.userdata, 'patient_language', 'English')
 
-Then say in {patient_language}: 
+        await self.session.say(f"Thanks for letting me know, {HEALTHCARE_PROVIDER_NAME}", allow_interruptions=False)
+
+        prompt = f"""
+Say in {patient_language}: 
 "{ctx.userdata.patient_name}, it's a pleasure to meet you. My goal is to make
 your at-home recovery as smooth as possible. I work closely with
 {HEALTHCARE_PROVIDER_NAME}'s office to understand your surgery and recovery
@@ -455,13 +391,13 @@ and text you a summary afterwards. Over the next few days, I'll also check in on
 how you're doing and send you key reminders for things like medication and wound
 care. If you have any questions while you're recovering at home, feel free to
 text or call me anytime, I'm here 24/7 as your personal recovery assistant."
-
-Then in English say: 
-"Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal recap
-at the end to make sure I've noted everything correctly for {ctx.userdata.patient_name}."
             """
 
         await self.session.generate_reply(instructions=prompt, allow_interruptions=False)
+
+        await self.session.say(f"""
+Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal recap at the end to make sure I've noted everything correctly for {ctx.userdata.patient_name}.
+        """, allow_interruptions=False)
 
         # Mute audio output while in passive mode (prevent any TTS playback)
         try:
@@ -552,11 +488,11 @@ at the end to make sure I've noted everything correctly for {ctx.userdata.patien
                 seen.add(key)
                 dedup.append((text, itype))
         logger.debug(f"[WORKFLOW] Session: {session_id} | Instruction count (unique): {len(dedup)}")
+        
         # Simple bullet list with type labels
         bullet_lines = [f"{idx}. ({itype}) {text}" for idx, (text, itype) in enumerate(dedup, start=1)]
         summary_block = "\n".join(bullet_lines) if bullet_lines else "(No discharge instructions were detected.)"
-        summary_intro = "Here are the discharge instructions I captured:" if bullet_lines else "I didn't confidently hear any explicit discharge instructions." 
-        deterministic_reply = f"{summary_intro}\n{summary_block}\nLet me know if something should be added or corrected."
+
         # Log deterministic reply content
         logger.debug(f"[WORKFLOW] Session: {session_id} | Deterministic exit summary prepared")
         
@@ -697,7 +633,7 @@ have any questions, I'm only a text or phone call away.
 If you need anything else, let me know. Otherwise feel free to hang up.
                 """
 
-            await self.session.generate_reply(prompt, allow_interruptions=False)
+            await self.session.generate_reply(instructions=prompt, allow_interruptions=False)
 
             return None
         else:
@@ -841,6 +777,58 @@ If you need anything else, let me know. Otherwise feel free to hang up.
                 
         logger.debug("[PASSIVE CHECK] No exit trigger matched for transcript")
         return False
+
+    def _extract_patient_info_quietly(self, transcript_text: str, session_id: str):
+        """Extract patient name and language from conversation quietly"""
+        import re
+        
+        # Extract patient name patterns
+        name_patterns = [
+            r'this is (\w+)',
+            r'we have (\w+)',
+            r'patient is (\w+)',
+            r'(\w+) is here',
+            r'(\w+) is the patient'
+        ]
+        
+        for pattern in name_patterns:
+            match = re.search(pattern, transcript_text.lower())
+            if match:
+                patient_name = match.group(1).title()
+                self.session.userdata.patient_name = patient_name
+                logger.info(f"[AUTO EXTRACT] Session: {session_id} | Patient name: {patient_name}")
+                self.memory.store_session_data(session_id, "patient_name", patient_name)
+                break
+        
+        # Extract language patterns
+        language_patterns = [
+            r'speaks? (spanish|chinese|french|german|italian|portuguese|dutch|russian|arabic|japanese)',
+            r'language is (spanish|chinese|french|german|italian|portuguese|dutch|russian|arabic|japanese)',
+            r'prefers? (spanish|chinese|french|german|italian|portuguese|dutch|russian|arabic|japanese)'
+        ]
+        
+        supported_languages = {
+            'spanish': 'Spanish', 'chinese': 'Chinese', 'french': 'French',
+            'german': 'German', 'italian': 'Italian', 'portuguese': 'Portuguese',
+            'dutch': 'Dutch', 'russian': 'Russian', 'arabic': 'Arabic', 'japanese': 'Japanese'
+        }
+        
+        for pattern in language_patterns:
+            match = re.search(pattern, transcript_text.lower())
+            if match:
+                lang_key = match.group(1).lower()
+                patient_language = supported_languages.get(lang_key, 'English')
+                self.session.userdata.patient_language = patient_language
+                logger.info(f"[AUTO EXTRACT] Session: {session_id} | Patient language: {patient_language}")
+                self.memory.store_session_data(session_id, "patient_language", patient_language)
+                break
+        else:
+            # Default to English if no language mentioned
+            self.session.userdata.patient_language = 'English'
+            logger.info(f"[AUTO EXTRACT] Session: {session_id} | Defaulting to English")
+        
+        # Mark as extracted so we don't do this again
+        self.session.userdata.patient_info_extracted = True
 
     def _log_conversation_message(self, session_id: str, role: str, message: str):
         """Log conversation message to Redis"""
