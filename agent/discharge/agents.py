@@ -226,15 +226,15 @@ class DischargeAgent(Agent):
             "Do NOT send email until you have explicit confirmation from the doctor."
         )
 
-        tts = openai.TTS(voice="shimmer", instructions="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother.")
+        # tts = openai.TTS(voice="shimmer", instructions="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother.")
 
         # if is_console_mode():
-        #     tts = openai.TTS(voice="shimmer")
+        tts = openai.TTS(voice="shimmer")
         # else:
-        #     tts = hume.TTS(
-        #         voice=hume.VoiceById(id=POSTOP_VOICE_ID),
-        #         description="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother."
-        #     )
+        # tts = hume.TTS(
+        #     voice=hume.VoiceById(id=POSTOP_VOICE_ID),
+        #     description="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother."
+        # )
 
         super().__init__(
             instructions=instructions,
@@ -356,7 +356,7 @@ class DischargeAgent(Agent):
 
     # Workflow Transition Functions
     @function_tool
-    async def start_passive_listening(self, ctx: RunContext[SessionData]):
+    async def start_passive_listening(self, ctx: RunContext[SessionData]) -> None:
         """Enter passive listening mode for instruction collection."""
         
         ctx.userdata.workflow_mode = "passive_listening"
@@ -379,25 +379,28 @@ class DischargeAgent(Agent):
         
         patient_language = getattr(ctx.userdata, 'patient_language', 'English')
 
-        await self.session.say(f"Thanks for letting me know, {HEALTHCARE_PROVIDER_NAME}", allow_interruptions=False)
-
         prompt = f"""
-Say in {patient_language}: 
-"{ctx.userdata.patient_name}, it's a pleasure to meet you. My goal is to make
-your at-home recovery as smooth as possible. I work closely with
-{HEALTHCARE_PROVIDER_NAME}'s office to understand your surgery and recovery
-protocol. I'm going to listen quietely to capture today's discharge instructions
-and text you a summary afterwards. Over the next few days, I'll also check in on
-how you're doing and send you key reminders for things like medication and wound
-care. If you have any questions while you're recovering at home, feel free to
-text or call me anytime, I'm here 24/7 as your personal recovery assistant."
+Follow this script exactly as written, do NOT deviate:
+
+In English, please say:
+    "Thanks for letting me know, {HEALTHCARE_PROVIDER_NAME}"
+
+Then say in {patient_language}: 
+    "{ctx.userdata.patient_name}, it's a pleasure to meet you. My goal is to make
+    your at-home recovery as smooth as possible. I work closely with
+    {HEALTHCARE_PROVIDER_NAME}'s office to understand your surgery and recovery
+    protocol. I'm going to listen quietely to capture today's discharge instructions
+    and text you a summary afterwards. Over the next few days, I'll also check in on
+    how you're doing and send you key reminders for things like medication and wound
+    care. If you have any questions while you're recovering at home, feel free to
+    text or call me anytime, I'm here 24/7 as your personal recovery assistant."
+
+Finally please say in English:
+    "Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal 
+    recap at the end to make sure I've noted everything correctly for {ctx.userdata.patient_name}."
             """
 
         await self.session.generate_reply(instructions=prompt, allow_interruptions=False)
-
-        await self.session.say(f"""
-Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal recap at the end to make sure I've noted everything correctly for {ctx.userdata.patient_name}.
-        """, allow_interruptions=False)
 
         # Mute audio output while in passive mode (prevent any TTS playback)
         try:
@@ -406,8 +409,8 @@ Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal recap
         except Exception as e:
             logger.error(f"[PASSIVE AUDIO] Failed to disable output audio: {e}")
 
-        return None, None
-    
+        return None
+
     @function_tool()
     async def provide_instruction_summary(self, ctx: RunContext[SessionData]):
         """
@@ -488,7 +491,7 @@ Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal recap
                 seen.add(key)
                 dedup.append((text, itype))
         logger.debug(f"[WORKFLOW] Session: {session_id} | Instruction count (unique): {len(dedup)}")
-        
+
         # Simple bullet list with type labels
         bullet_lines = [f"{idx}. ({itype}) {text}" for idx, (text, itype) in enumerate(dedup, start=1)]
         summary_block = "\n".join(bullet_lines) if bullet_lines else "(No discharge instructions were detected.)"
