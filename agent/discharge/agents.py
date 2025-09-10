@@ -16,7 +16,7 @@ AGENTS AND WORKFLOW:
    - Comprehensive agent that handles the entire discharge workflow
    - Manages patient setup, instruction collection, translation, and verification
    - Supports both passive listening and active translation modes
-   - Integrates with Redis memory for session persistence
+   - Persists session data to local files
    - Schedules intelligent follow-up calls via PostOp AI scheduling system
 
 COMPLETE TOOL REFERENCE:
@@ -75,7 +75,7 @@ WORKFLOW MODES:
 INTEGRATIONS:
 
 - LiveKit: Voice processing with Deepgram STT, OpenAI LLM, and configurable TTS
-- Redis Memory: Session persistence and instruction storage
+- File Storage: Session persistence and instruction storage
 - Scheduling System: Intelligent follow-up call generation via LLM analysis
 - Medical RAG: Integration with medical knowledge base for enhanced responses
 
@@ -86,7 +86,7 @@ SUPPORTED LANGUAGES:
 
 TECHNICAL FEATURES:
 
-- Session Management: Redis-based persistence across agent handoffs
+- Session Management: File-based persistence across agent handoffs
 - Error Handling: Graceful degradation and retry logic
 - Console/Production Modes: Flexible deployment options
 - TTS Provider Selection: OpenAI (console) / Hume (production)
@@ -112,18 +112,13 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-import livekit.api as api
-from livekit.agents import Agent, AgentSession, RunContext, JobContext, WorkerOptions, cli, ConversationItemAddedEvent
-from livekit.agents.llm import ChatContext, ChatMessage, StopResponse, function_tool
+from livekit.agents import Agent, AgentSession, RunContext, JobContext, WorkerOptions, cli, ConversationItemAddedEvent, RoomInputOptions
+from livekit.agents.llm import ChatContext, ChatMessage, function_tool
 from livekit.plugins import deepgram, openai, silero
-from livekit.plugins import hume
+from livekit.plugins import noise_cancellation
 
-# Health check endpoint is handled by `agent/main.py`
-# Import configuration and utilities
-from .config import AGENT_NAME, LIVEKIT_AGENT_NAME, POSTOP_VOICE_ID, GMAIL_USERNAME, GMAIL_APP_PASSWORD, SUMMARY_EMAIL_RECIPIENT
-# Removed unused imports
-from shared import RedisMemory, prompt_manager
-from shared.email_service import send_instruction_summary_email
+from .config import LIVEKIT_AGENT_NAME, GMAIL_USERNAME, GMAIL_APP_PASSWORD, SUMMARY_EMAIL_RECIPIENT
+from shared import send_instruction_summary_email
 
 logger = logging.getLogger("postop-agent")
 
@@ -139,20 +134,28 @@ class SessionData:
     """Session data passed between agents"""
     patient_name: str | None = None
     patient_language: str | None = None
+
+    # not sure this is really needed for the demo
     workflow_mode: str = "setup"  # setup -> passive_listening/active_translation -> verification
+
     is_passive_mode: bool = False
-    collected_instructions: list = None
     room_people: list = None
+
     # Tool-captured discharge instructions
-    instructions_map: dict | None = None  # normalized_instruction -> category
-    
+    collected_instructions: list = None
+
+    # OpenAI format conversation logging
+    openai_conversation: list = None
+    session_start_time: str | None = None
+
     def __post_init__(self):
         if self.collected_instructions is None:
             self.collected_instructions = []
-        if self.room_people is None:
-            self.room_people = []
-        if self.instructions_map is None:
-            self.instructions_map = {}
+        if self.openai_conversation is None:
+            self.openai_conversation = []
+        if self.session_start_time is None:
+            from datetime import datetime
+            self.session_start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     
 
 
@@ -167,90 +170,99 @@ class DischargeAgent(Agent):
             chat_ctx: Chat context from previous agent (for conversation continuity)
         """
         # Load initial discharge agent instructions from YAML (currently simplified inline)
-        instructions = (
-            "You are Maya, an AI discharge assistant.\n"
-            "GOAL: Capture ONLY true discharge instructions while in passive mode; ignore filler.\n\n"
-            "SIMPLE WORKFLOW:\n"
-            "1. Briefly introduce yourself and ask who is present in the room.\n"
-            "2. When the doctor responds, immediately call start_passive_listening.\n"
-            "3. Then silently capture discharge instructions.\n\n"
-            "Capture IF the utterance conveys actual medical guidance (examples):\n"
-            "- Medication: name, dose, frequency, route, duration (\"Take two Tylenol every four hours for pain\")\n"
-            "- Activity / mobility restrictions (\"No heavy lifting for two weeks\")\n"
-            "- Wound or incision care (cleaning, dressing, showering guidance)\n"
-            "- Diet / hydration requirements\n"
-            "- Follow-up appointments or scheduling tasks\n"
-            "- Warning signs / when to call doctor / ER triggers\n"
-            "- Device usage or care (brace, sling, ice, compression, drains)\n"
-            "- Explicit precautions (bathing, driving, sexual activity, smoking, alcohol)\n\n"
-            "IGNORE (do NOT capture): greetings, acknowledgements, thanks, names/vocatives alone, chit-chat, encouragement, partial fragments without actionable content, standalone patient name, or single-word responses.\n\n"
-            
-            "During passive mode, you can only respond if directly addressed, asked to translate, or completion/verification is requested.\n\n"
-            "On exit (triggered by name or completion phrase):\n"
-            "1. Provide concise bullet list of ONLY captured instructions (merged into complete lines; no filler numbers if none captured).\n"
-            "2. Ask once if anything is missing or needs correction (<= 1 short sentence).\n"
-            "3. Do NOT say you will now listen quietly again.\n"
-            "4. After the doctor confirms instructions are complete and correct, call send_instruction_summary_email to send the summary via email.\n\n"
-            "If answering a direct question (outside passive): concise (<=2 sentences), medically accurate.\n"
-            "Never invent an instruction; if uncertain, ask for clarification instead of guessing.\n\n"
-            "CRITICAL PASSIVE MODE RULES:\n"
-            "While passive, your speech is suppressed but you can still analyze and make tool calls:\n"
-            "* If it contains a discharge instruction, call collect_instruction with:\n"
-            "    instruction_text: full clear sentence (add dose, frequency, duration if stated)\n"
-            "    instruction_type: one of medication | activity | wound | diet | followup | warning | device | precaution | other\n"
-            "* IMPORTANT: After processing each user message, think step-by-step if discharge instruction giving is complete\n"
-            "* If complete, IMMEDIATELY call provide_instruction_summary to exit passive mode\n"
-            "* If it is NOT an instruction (greeting, acknowledgement, chit‑chat), you may respond but your speech will be suppressed.\n\n"
-            "INTELLIGENT EXIT DETECTION - THINK STEP BY STEP:\n"
-            "For each user message, ask yourself:\n"
-            "Step 1: Does this message contain a discharge instruction? If yes, collect it.\n"
-            "Step 2: Does this message signal instruction completion? Look for:\n"
-            "   - DIRECT ADDRESS: \"Maya\", \"Hey Maya\", \"Maya, are you there?\", \"Maya, did you get that?\"\n"
-            "   - COMPLETION SIGNALS: \"That's all\", \"That's everything\", \"Any questions?\", \"We're done\", \"We're finished\", \"That covers it\"\n"
-            "   - VERIFICATION REQUESTS: \"Did you get all that?\", \"Did you capture everything?\", \"Can you repeat that?\"\n"
-            "   - SOCIAL CLOSINGS: \"Good luck\", \"Take care\", \"Feel better\", \"Have a good day\", \"See you later\"\n"
-            "   - CONVERSATION SHIFTS: Moving from medical instructions to social pleasantries\n"
-            "Step 3: If ANY completion signal detected, IMMEDIATELY call provide_instruction_summary\n"
-            "Step 4: If no completion signal, continue passive listening\n\n"
-            "EXIT SIGNAL PRIORITY (call provide_instruction_summary if ANY detected):\n"
-            "🚨 HIGHEST: Direct address with \"Maya\" - ALWAYS exit immediately\n"
-            "🔴 HIGH: \"Any questions?\", \"That's all\", \"We're done\" - Exit immediately  \n"
-            "🟡 MEDIUM: Social closings after instructions - Exit if instructions were given\n"
-            "🟢 LOW: Verification requests - Exit and provide summary\n"
-            "Remember: It's better to exit early when addressed than to miss an exit signal!\n\n"
-            "EMAIL SENDING WORKFLOW:\n"
-            "After providing the instruction summary, listen for confirmation signals:\n"
-            "- \"That's correct\", \"Yes, that's right\", \"That looks good\", \"Perfect\", \"Exactly\"\n"
-            "- \"That's everything\", \"That's complete\", \"Nothing to add\", \"All set\"\n"
-            "When you receive confirmation, IMMEDIATELY call send_instruction_summary_email.\n"
-            "Do NOT send email until you have explicit confirmation from the doctor."
-        )
+        instructions = """
+You are Maya, an AI discharge assistant designed to capture medical discharge instructions during doctor-patient conversations. You have access to these functions:
+- extract_patient_info(patient_name, patient_language): Extracts patient name and language when mentioned
+- start_passive_listening(): Enters passive listening mode
+- collect_instruction(instruction_text, instruction_type): Captures a discharge instruction
+- provide_instruction_summary(): Exits passive mode and provides summary
+- send_instruction_summary_email(): Sends the instruction summary via email
 
-        # tts = openai.TTS(voice="shimmer", instructions="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother.")
+## CORE WORKFLOW
 
-        # if is_console_mode():
-        tts = openai.TTS(voice="shimmer")
-        # else:
-        # tts = hume.TTS(
-        #     voice=hume.VoiceById(id=POSTOP_VOICE_ID),
-        #     description="Middle-age black woman, clear Atlanta accent, that exudes warmth, care and confidence. Speaks at a measured pace and is conversational - like a friend, a caring nurse, or your mother."
-        # )
+**Initial Interaction:**
+1. Briefly introduce yourself as Maya and ask who is present in the room
+2. When the doctor responds with patient information, call extract_patient_info() to capture:
+   - Patient name (if mentioned)
+   - Patient language preference (if mentioned, e.g., "speaks Spanish", "prefers French")
+3. Then IMMEDIATELY call start_passive_listening()
+4. Enter passive listening mode to capture discharge instructions
 
+## WHAT TO CAPTURE AS INSTRUCTIONS
+
+Capture ONLY utterances that convey actual medical guidance:
+- **Medication:** name, dose, frequency, route, duration ("Take two Tylenol every four hours for pain")
+- **Activity/Mobility:** restrictions or requirements ("No heavy lifting for two weeks")
+- **Wound Care:** cleaning, dressing, showering guidance
+- **Diet/Hydration:** specific requirements or restrictions
+- **Follow-up:** appointments or scheduling tasks
+- **Warning Signs:** when to call doctor or go to ER
+- **Device Usage:** brace, sling, ice, compression, drain care
+- **Precautions:** bathing, driving, sexual activity, smoking, alcohol restrictions
+
+## WHAT TO IGNORE
+
+Do NOT capture: greetings, acknowledgements, thanks, names alone, chit-chat, encouragement, partial fragments without actionable content, standalone patient names, or single-word responses.
+
+## PASSIVE MODE BEHAVIOR
+
+While in passive mode:
+- Your speech is suppressed but you can still analyze and make tool calls
+- For each message containing a discharge instruction, call collect_instruction with:
+  - instruction_text: full clear sentence (include dose, frequency, duration if stated)
+  - instruction_type: one of [medication | activity | wound | diet | followup | warning | device | precaution | other]
+- You can only respond if directly addressed, asked to translate, or completion/verification is requested
+- After processing each message, evaluate if instruction-giving is complete
+
+## INTELLIGENT EXIT DETECTION
+
+For each user message, think step-by-step:
+
+**Step 1:** Does this message contain a discharge instruction? If yes, collect it.
+
+**Step 2:** Does this message signal instruction completion? Look for:
+- 🚨 **HIGHEST PRIORITY:** Direct address with "Maya" - ALWAYS exit immediately
+- 🔴 **HIGH:** "Any questions?", "That's all", "We're done", "That's everything" - Exit immediately
+- 🟡 **MEDIUM:** Social closings after instructions ("Good luck", "Take care", "Feel better") - Exit if instructions were given
+- 🟢 **LOW:** Verification requests ("Did you get all that?", "Can you repeat that?") - Exit and provide summary
+
+**Step 3:** If ANY completion signal detected, IMMEDIATELY call provide_instruction_summary()
+
+**Step 4:** If no completion signal, continue passive listening
+
+Remember: It's better to exit early when addressed than to miss an exit signal!
+
+## EXIT PROTOCOL
+
+When exiting passive mode:
+1. Provide a concise bullet list of ONLY captured instructions (merged into complete lines)
+2. Ask once if anything is missing or needs correction (≤ 1 short sentence)
+3. Do NOT say you will listen quietly again
+
+## EMAIL CONFIRMATION WORKFLOW
+
+After providing the instruction summary, listen for confirmation signals:
+- "That's correct", "Yes, that's right", "That looks good", "Perfect", "Exactly"
+- "That's everything", "That's complete", "Nothing to add", "All set"
+
+When you receive explicit confirmation from the doctor, IMMEDIATELY call send_instruction_summary_email().
+Do NOT send email until you have clear confirmation.
+
+## DIRECT QUESTIONS
+
+If answering direct questions outside passive mode: be concise (≤2 sentences) and medically accurate. You must refer to the instructions you have captured. 
+Never invent instructions - you must have captured them. Ask for clarification if needed.
+
+Think step-by-step about whether each message contains discharge instructions or whether it signals completion of the instruction-giving process.
+"""
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            stt=deepgram.STT(model="nova-3", language="multi"),
-            llm=openai.LLM(model="gpt-4.1"),
-            tts=tts,
+            stt=deepgram.STT(model="nova-3", language="multi"),  # phone -> chat
+            llm=openai.LLM(model="gpt-4.1"), # chat -> chat
+            tts=openai.TTS(voice="shimmer"), # chat -> audio -> twilio.  $$$$ ElevenLabs or Hume. 
             vad=silero.VAD.load()
         )
-
-        self.memory = RedisMemory()
-
-        import redis
-        import os
-        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-        self.redis_client = redis.from_url(redis_url, decode_responses=True)
 
         self._original_say = None # we monkey patch say and generate_reply to log all output
         self._original_generate_reply = None
@@ -268,45 +280,58 @@ class DischargeAgent(Agent):
         session_id = f"session_{int(time.time())}"
         self.session.userdata.session_id = session_id
         logger.info(f"Discharge agent starting with session: {session_id}")
-        
+
+        # Add system message to OpenAI conversation log
+        system_instructions = (
+            "You are Maya, an AI discharge assistant.\n"
+            "GOAL: Capture ONLY true discharge instructions while in passive mode; ignore filler.\n\n"
+            "SIMPLE WORKFLOW:\n"
+            "1. Briefly introduce yourself and ask who is present in the room.\n"
+            "2. When the doctor responds, immediately call start_passive_listening.\n"
+            "3. Then silently capture discharge instructions.\n\n"
+            # ... (rest of instructions from self.instructions)
+        )
+        self._add_to_openai_conversation("system", system_instructions)
+
         # Set up logging wrapper for session.say and generate_reply
         self._original_say = self.session.say
         self._original_generate_reply = self.session.generate_reply
-        self.session.say = self._logged_say
-        self.session.generate_reply = self._logged_generate_reply
-        
+        self.session.say = self._logged_say # session.say("Hello!")
+        self.session.generate_reply = self._logged_generate_reply # session.generate_reply(instructions="...")
+
         # Set up event handler for conversation items (captures all agent responses)
         @self.session.on("conversation_item_added")
         def on_conversation_item_added(event: ConversationItemAddedEvent):
             # Only log agent messages (not user messages, which we already log elsewhere)
             if event.item.role == "assistant":
-                session_id = getattr(self.session.userdata, 'session_id', 'unknown')
                 response_text = event.item.text_content or ""
                 if response_text.strip():
-                    logger.info(f"[on_conversation_item_added] Session: {session_id} | Role: {event.item.role} | Text: '{response_text}'")
-                    print(f"[on_conversation_item_added] Session: {session_id} | Role: {event.item.role} | Text: '{response_text}'")
-                    # Avoid writing to Redis here to prevent duplicates; wrappers handle persistence.
+                    logger.info(f"[on_conversation_item_added] Role: {event.item.role} | Text: '{response_text}'")
+                    # Avoid duplicate logging here; wrappers handle persistence.
 
         await self.session.say(f"Hi all! I'm Maya, thanks for dialing me in today. So {HEALTHCARE_PROVIDER_NAME}, who do we have in the room today?", allow_interruptions=False)
+
+    async def on_exit(self):
+        """Handle session end - write conversation file"""
+        session_id = getattr(self.session.userdata, 'session_id', 'unknown')
+        logger.info(f"Session ending: {session_id}")
+
+        # Write conversation file
+        self._write_conversation_file(session_id)
 
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         """Handle user speech completion with exit detection and TTS suppression during passive mode"""
         # Get passive mode status from session userdata
         is_passive_mode = getattr(self.session.userdata, 'is_passive_mode', False)
         session_id = getattr(self.session.userdata, 'session_id', 'unknown')
-        
-        # Comprehensive STT logging with session tracking
+
+        # Comprehensive STT logging
         transcript_text = new_message.text_content or ""
-        logger.info(f"[STT INPUT] Session: {session_id} | Passive: {is_passive_mode} | Text: '{transcript_text}'")
-        print(f"[CONVERSATION LOG] Session: {session_id} | USER INPUT: '{transcript_text}'")
-        
-        # Store conversation in Redis
+        logger.info(f"[STT INPUT] Passive: {is_passive_mode} | {transcript_text}")
+
+        # Store conversation in OpenAI format for file logging
         if transcript_text.strip():  # Only log non-empty messages
-            self._log_conversation_message(session_id, "user", transcript_text)
-        
-        # Extract patient info quietly in the background (only once)
-        if not getattr(self.session.userdata, 'patient_info_extracted', False):
-            self._extract_patient_info_quietly(transcript_text, session_id)
+            self._add_to_openai_conversation("user", transcript_text)
         
 
 
@@ -314,70 +339,106 @@ class DischargeAgent(Agent):
     async def collect_instruction(self, ctx: RunContext[SessionData], instruction_text: str):
         """
         Collect a medical discharge instruction being read aloud. These are items related to the patient's post operative recovery and care.
-        
+
         Args:
             instruction_text: The instruction being given
             instruction_type: Type of instruction (medication, activity, followup, warning, etc.)
         """
         from datetime import datetime
-        
+
         # Check for near-duplicates before adding
         session_id = getattr(ctx.userdata, 'session_id', 'unknown')
         cleaned_text = instruction_text.strip()
-        
+
         # Log the instruction being collected
-        logger.info(f"[COLLECT] Session: {session_id} | Collecting: '{cleaned_text}'")
-        
+        logger.info(f"[COLLECT] {cleaned_text}")
+
         # Check for duplicates
         existing_instructions = getattr(ctx.userdata, 'collected_instructions', [])
         for i, existing in enumerate(existing_instructions):
             existing_text = existing.get("text", "").strip() if isinstance(existing, dict) else str(existing).strip()
             # Compare ignoring punctuation and case
             if cleaned_text.lower().rstrip('.') == existing_text.lower().rstrip('.'):
-                logger.warning(f"[COLLECT] Session: {session_id} | Duplicate detected! Skipping: '{cleaned_text}' (matches #{i+1}: '{existing_text}')")
+                logger.warning(f"[COLLECT] Duplicate detected! Skipping: '{cleaned_text}'")
+                # Log tool call for OpenAI format
+                self._log_tool_call("collect_instruction", {"instruction_text": instruction_text}, "Duplicate instruction - already noted")
                 # Return silently without adding duplicate
                 if ctx.userdata.workflow_mode == "passive_listening" and ctx.userdata.is_passive_mode:
                     return None, None  # Silent collection
                 else:
                     return None, "I've already noted that instruction."
-        
+
         entry = {
             "text": cleaned_text,
             "timestamp": datetime.now().isoformat()
         }
         ctx.userdata.collected_instructions.append(entry)
-        logger.info(f"[COLLECT] Session: {session_id} | Successfully collected instruction #{len(ctx.userdata.collected_instructions)}: '{entry['text'][:60]}...'")
-        
+        logger.info(f"[COLLECT] Successfully collected instruction #{len(ctx.userdata.collected_instructions)}")
+
+        # Log tool call for OpenAI format
+        self._log_tool_call("collect_instruction", {"instruction_text": instruction_text}, f"Collected instruction: {cleaned_text}")
+
         # Stay silent in passive mode unless directly asked
         if ctx.userdata.workflow_mode == "passive_listening" and ctx.userdata.is_passive_mode:
             return None, None  # Silent collection
         else:
             return None, "I've noted that instruction."
 
+    @function_tool
+    async def extract_patient_info(self, ctx: RunContext[SessionData], patient_name: str = None, patient_language: str = None) -> str:
+        """
+        Extract and store patient information from the conversation.
+
+        Call this function when you identify the patient's name or preferred language
+        from the conversation. This helps personalize the discharge process.
+
+        Args:
+            patient_name: The patient's first name if mentioned
+            patient_language: The patient's preferred language (English, Spanish, French, etc.)
+        """
+        updates = []
+
+        if patient_name:
+            ctx.userdata.patient_name = patient_name.strip()
+            updates.append(f"Patient name: {patient_name}")
+            logger.info(f"[EXTRACT] Patient name: {patient_name}")
+
+        if patient_language:
+            ctx.userdata.patient_language = patient_language.strip()
+            updates.append(f"Language: {patient_language}")
+            logger.info(f"[EXTRACT] Patient language: {patient_language}")
+
+        # Mark as extracted so we don't try again
+        ctx.userdata.patient_info_extracted = True
+
+        if updates:
+            return f"Extracted: {', '.join(updates)}"
+        else:
+            return "No patient information provided"
+
     # Workflow Transition Functions
     @function_tool
     async def start_passive_listening(self, ctx: RunContext[SessionData]) -> None:
         """Enter passive listening mode for instruction collection."""
-        
+
         ctx.userdata.workflow_mode = "passive_listening"
         ctx.userdata.is_passive_mode = True
         logger.info(f"Entering passive listening mode for session: {ctx.userdata.session_id}")
-        
-        # Also store in memory for persistence
-        self.memory.store_session_data(ctx.userdata.session_id, "workflow_mode", "passive_listening")
-        self.memory.store_session_data(ctx.userdata.session_id, "is_passive_mode", True)
 
         # Patient language defaults to English if not set
         if not ctx.userdata.patient_language:
             ctx.userdata.patient_language = 'English'
             logger.info(f"[PATIENT SETUP] Defaulting to English for session: {ctx.userdata.session_id}")
-        
+
         # Patient name defaults if not set
         if not ctx.userdata.patient_name:
             ctx.userdata.patient_name = 'the patient'
             logger.info(f"[PATIENT SETUP] Defaulting patient name for session: {ctx.userdata.session_id}")
-        
+
         patient_language = getattr(ctx.userdata, 'patient_language', 'English')
+
+        # Log tool call for OpenAI format
+        self._log_tool_call("start_passive_listening", {}, "Entered passive listening mode")
 
         prompt = f"""
 Follow this script exactly as written, do NOT deviate:
@@ -385,7 +446,7 @@ Follow this script exactly as written, do NOT deviate:
 In English, please say:
     "Thanks for letting me know, {HEALTHCARE_PROVIDER_NAME}"
 
-Then say in {patient_language}: 
+Then say in {patient_language}:
     "{ctx.userdata.patient_name}, it's a pleasure to meet you. My goal is to make
     your at-home recovery as smooth as possible. I work closely with
     {HEALTHCARE_PROVIDER_NAME}'s office to understand your surgery and recovery
@@ -396,7 +457,7 @@ Then say in {patient_language}:
     text or call me anytime, I'm here 24/7 as your personal recovery assistant."
 
 Finally please say in English:
-    "Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal 
+    "Alright {HEALTHCARE_PROVIDER_NAME}, feel free to begin. I'll give a verbal
     recap at the end to make sure I've noted everything correctly for {ctx.userdata.patient_name}."
             """
 
@@ -404,7 +465,7 @@ Finally please say in English:
 
         # Mute audio output while in passive mode (prevent any TTS playback)
         try:
-            self.session.output.set_audio_enabled(False)
+            self.session.output.set_audio_enabled(False) # turns off TTS so even if the LLM says something, it doesn't
             logger.debug("[PASSIVE AUDIO] Output audio disabled")
         except Exception as e:
             logger.error(f"[PASSIVE AUDIO] Failed to disable output audio: {e}")
@@ -499,11 +560,14 @@ Finally please say in English:
         # Log deterministic reply content
         logger.debug(f"[WORKFLOW] Session: {session_id} | Deterministic exit summary prepared")
         
+        # Log tool call for OpenAI format
+        self._log_tool_call("provide_instruction_summary", {}, f"Provided summary of {len(dedup)} instructions")
+
         # Send deterministic summary first to avoid LLM drifting back into passive intro
         await ctx.session.generate_reply(instructions=f"""
 Here are the discharge instructions you captured:\n{summary_block}
 
-If you didn't capture any, let them know in English. 
+If you didn't capture any, let them know in English.
 
 
 
@@ -519,10 +583,10 @@ Does that sound right?"
 
 The Patient's name is {ctx.userdata.patient_name or 'the patient'} and their native language is {ctx.userdata.patient_language or 'English'}.
 
-If the patient's native language is not English, ask {HEALTHCARE_PROVIDER_NAME} 
+If the patient's native language is not English, ask {HEALTHCARE_PROVIDER_NAME}
 if they would like you to repeat the instructions in {ctx.userdata.patient_language or 'English'}.
 """)
-        
+
         return "Exited passive listening mode and provided summary"
 
     @function_tool
@@ -539,6 +603,8 @@ if they would like you to repeat the instructions in {ctx.userdata.patient_langu
         """
         session_id = getattr(ctx.userdata, 'session_id', 'unknown')
         patient_name = getattr(ctx.userdata, 'patient_name', None)
+
+        await self.session.say(f"Give me one moment while I send the instruction summary.")
         
         logger.info(f"[EMAIL] Session: {session_id} | Attempting to send instruction summary email")
         
@@ -603,18 +669,24 @@ if they would like you to repeat the instructions in {ctx.userdata.patient_langu
             gmail_username=GMAIL_USERNAME,
             gmail_app_password=GMAIL_APP_PASSWORD,
             recipient_email=SUMMARY_EMAIL_RECIPIENT,
-            patient_language=patient_language
+            patient_language=patient_language,
+            healthcare_provider_name=HEALTHCARE_PROVIDER_NAME
         )
 
-        
+        # Log tool call for OpenAI format
+        if success:
+            self._log_tool_call("send_instruction_summary_email", {"patient_name": patient_name}, f"Email sent successfully with {len(instructions)} instructions")
+        else:
+            self._log_tool_call("send_instruction_summary_email", {"patient_name": patient_name}, f"Email failed: {message}")
+
         if success:
             logger.info(f"[EMAIL] Session: {session_id} | Email sent successfully")
 
             patient_language = getattr(ctx.userdata, 'patient_language', 'English')
-            
+
             if patient_language != 'English':
                 prompt = f"""
-First say in English: "Thanks for confirming." 
+First say in English: "Thanks for confirming and the instructions have been sent."
 
 Then in the patient's native language ({patient_language}) say:
 
@@ -627,7 +699,7 @@ Then in English say:
                 """
             else:
                 prompt = f"""
-Thanks for confirming. 
+Thanks for confirming.
 
 {patient_name}, like I mentioned before, I'll send a summary to
 your email now for reference, and check-in on you over the next few days. If you
@@ -781,96 +853,21 @@ If you need anything else, let me know. Otherwise feel free to hang up.
         logger.debug("[PASSIVE CHECK] No exit trigger matched for transcript")
         return False
 
-    def _extract_patient_info_quietly(self, transcript_text: str, session_id: str):
-        """Extract patient name and language from conversation quietly"""
-        import re
-        
-        # Extract patient name patterns
-        name_patterns = [
-            r'this is (\w+)',
-            r'we have (\w+)',
-            r'patient is (\w+)',
-            r'(\w+) is here',
-            r'(\w+) is the patient'
-        ]
-        
-        for pattern in name_patterns:
-            match = re.search(pattern, transcript_text.lower())
-            if match:
-                patient_name = match.group(1).title()
-                self.session.userdata.patient_name = patient_name
-                logger.info(f"[AUTO EXTRACT] Session: {session_id} | Patient name: {patient_name}")
-                self.memory.store_session_data(session_id, "patient_name", patient_name)
-                break
-        
-        # Extract language patterns
-        language_patterns = [
-            r'speaks? (spanish|chinese|french|german|italian|portuguese|dutch|russian|arabic|japanese)',
-            r'language is (spanish|chinese|french|german|italian|portuguese|dutch|russian|arabic|japanese)',
-            r'prefers? (spanish|chinese|french|german|italian|portuguese|dutch|russian|arabic|japanese)'
-        ]
-        
-        supported_languages = {
-            'spanish': 'Spanish', 'chinese': 'Chinese', 'french': 'French',
-            'german': 'German', 'italian': 'Italian', 'portuguese': 'Portuguese',
-            'dutch': 'Dutch', 'russian': 'Russian', 'arabic': 'Arabic', 'japanese': 'Japanese'
-        }
-        
-        for pattern in language_patterns:
-            match = re.search(pattern, transcript_text.lower())
-            if match:
-                lang_key = match.group(1).lower()
-                patient_language = supported_languages.get(lang_key, 'English')
-                self.session.userdata.patient_language = patient_language
-                logger.info(f"[AUTO EXTRACT] Session: {session_id} | Patient language: {patient_language}")
-                self.memory.store_session_data(session_id, "patient_language", patient_language)
-                break
-        else:
-            # Default to English if no language mentioned
-            self.session.userdata.patient_language = 'English'
-            logger.info(f"[AUTO EXTRACT] Session: {session_id} | Defaulting to English")
-        
-        # Mark as extracted so we don't do this again
-        self.session.userdata.patient_info_extracted = True
 
-    def _log_conversation_message(self, session_id: str, role: str, message: str):
-        """Log conversation message to Redis"""
-        try:
-            import json
-            import time
-            
-            # Create message entry
-            msg_data = {
-                "timestamp": time.time(),
-                "role": role,
-                "message": message.strip()
-            }
-            
-            # Store in Redis
-            key = f"postop:conversations:{session_id}"
-            self.redis_client.lpush(key, json.dumps(msg_data))
-            
-            # Add session to sessions set for listing
-            self.redis_client.sadd("postop:conversations:sessions", session_id)
-            
-        except Exception as e:
-            logger.error(f"Failed to log conversation message: {e}")
+
         
     async def _logged_say(self, message: str, allow_interruptions: bool = True):
         """Wrapper for session.say that logs all outgoing messages and handles TTS suppression"""
-        session_id = getattr(self.session.userdata, 'session_id', 'unknown')
-        logger.info(f"[LLM OUTPUT] Session: {session_id} | Text: '{message}'")
-        print(f"[CONVERSATION LOG] Session: {session_id} | MAYA OUTPUT: '{message}'")
-        
-        # Store conversation in Redis
-        self._log_conversation_message(session_id, "assistant", message)
-        
+        logger.info(f"[LLM OUTPUT] {message}")
+
+        # Store conversation in OpenAI format for file logging
+        self._add_to_openai_conversation("assistant", message)
+
         # Check if TTS should be suppressed during passive mode
         if self._tts_suppressed:
-            logger.info(f"[TTS SUPPRESSED] Session: {session_id} | Passive mode - message logged but not spoken: '{message}'")
-            print(f"[TTS SUPPRESSED] Session: {session_id} | PASSIVE MODE: '{message}'")
+            logger.info(f"[TTS SUPPRESSED] Passive mode - message logged but not spoken: {message}")
             return None  # Suppress TTS output
-        
+
         # Call original say method for normal speech
         return await self._original_say(message, allow_interruptions=allow_interruptions)
 
@@ -878,16 +875,14 @@ If you need anything else, let me know. Otherwise feel free to hang up.
         """Wrapper for session.generate_reply that logs responses"""
         # Call original generate_reply method and capture response
         response = await self._original_generate_reply(*args, **kwargs)
-        
+
         # Log the generated response if available
         if hasattr(response, 'text_content') and response.text_content:
-            session_id = getattr(self.session.userdata, 'session_id', 'unknown')
-            logger.info(f"[LLM GENERATE_REPLY] Session: {session_id} | Text: '{response.text_content}'")
-            print(f"[CONVERSATION LOG] Session: {session_id} | MAYA GENERATE_REPLY: '{response.text_content}'")
-            
-            # Store conversation in Redis
-            self._log_conversation_message(session_id, "assistant", response.text_content)
-        
+            logger.info(f"[LLM GENERATE_REPLY] {response.text_content}")
+
+            # Store conversation in OpenAI format for file logging
+            self._add_to_openai_conversation("assistant", response.text_content)
+
         return response
 
     async def _passive_openai_analysis(self, session_id: str, transcript_text: str) -> None:
@@ -916,45 +911,121 @@ If you need anything else, let me know. Otherwise feel free to hang up.
         except Exception as e:
             logger.error(f"[_passive_openai_analysis] OpenAI call failed: {e}")
 
+    def _add_to_openai_conversation(self, role: str, content: str, tool_calls=None, tool_call_id=None):
+        """Add a message to the OpenAI format conversation log"""
+        try:
+            message = {
+                "role": role,
+                "content": content
+            }
 
-# Console entrypoint
-async def console_entrypoint(ctx: JobContext):
-    """Console entrypoint - uses OpenAI TTS"""
+            # Add tool_calls for assistant messages
+            if role == "assistant" and tool_calls:
+                message["tool_calls"] = tool_calls
+
+            # Add tool_call_id for tool messages
+            if role == "tool" and tool_call_id:
+                message["tool_call_id"] = tool_call_id
+
+            self.session.userdata.openai_conversation.append(message)
+
+        except Exception as e:
+            logger.error(f"Failed to add message to OpenAI conversation log: {e}")
+
+    def _log_tool_call(self, function_name: str, arguments: dict, result: str):
+        """Log a tool call in OpenAI format"""
+        try:
+            import uuid
+            tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
+
+            # Create tool call structure
+            tool_call = {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": function_name,
+                    "arguments": str(arguments)  # Convert to string as OpenAI expects
+                }
+            }
+
+            # Add assistant message with tool call
+            self._add_to_openai_conversation("assistant", "", tool_calls=[tool_call])
+
+            # Add tool result message
+            self._add_to_openai_conversation("tool", result, tool_call_id=tool_call_id)
+
+        except Exception as e:
+            logger.error(f"Failed to log tool call {function_name}: {e}")
+
+    def _write_conversation_file(self, session_id: str):
+        """Write the OpenAI format conversation to a timestamped file"""
+        try:
+            import json
+            import os
+
+            # Create logs directory if it doesn't exist
+            logs_dir = "session_logs"
+            os.makedirs(logs_dir, exist_ok=True)
+
+            # Create filename with timestamp
+            timestamp = getattr(self.session.userdata, 'session_start_time', 'unknown')
+            filename = f"{logs_dir}/session_{timestamp}_{session_id}.json"
+
+            # Prepare conversation data
+            conversation_data = {
+                "session_id": session_id,
+                "timestamp": timestamp,
+                "patient_name": getattr(self.session.userdata, 'patient_name', None),
+                "patient_language": getattr(self.session.userdata, 'patient_language', None),
+                "messages": getattr(self.session.userdata, 'openai_conversation', [])
+            }
+
+            # Write to file
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(conversation_data, f, indent=2, ensure_ascii=False)
+
+            logger.info(f"[CONVERSATION FILE] Session: {session_id} | Conversation saved to {filename}")
+
+        except Exception as e:
+            logger.error(f"Failed to write conversation file for session {session_id}: {e}")
+
+
+# Unified entrypoint for both console and production modes
+async def entrypoint(ctx: JobContext):
+    """Unified entrypoint for discharge workflow with noise cancellation"""
     # Check if this is an outbound followup call
     if ctx.job and ctx.job.metadata:
         try:
             import json
             metadata = json.loads(ctx.job.metadata)
-            
+
             # If there's call_schedule_item metadata, this is an outbound followup call
             if metadata.get("call_schedule_item"):
                 logger.info("Routing to followup workflow for outbound call")
                 from followup.agents import scheduled_followup_entrypoint
                 return await scheduled_followup_entrypoint(ctx)
-                
+
         except (json.JSONDecodeError, KeyError):
             # If metadata parsing fails, default to discharge workflow
             pass
-    
+
     # Default to discharge workflow
     logger.info("Routing to discharge workflow for inbound call")
     await ctx.connect()
-    
+
     session = AgentSession[SessionData](
         userdata=SessionData(),
-        user_away_timeout=30.0  # Consider away after 30s of silence
+        user_away_timeout=30.0
     )
 
-    ## CLAUDE: STOP CHANGING THIS TO THE ConsentCollector
     agent = DischargeAgent()
-    
+
     # Add idle/silence handler: auto-exit passive mode after sustained silence
     from livekit.agents import UserStateChangedEvent
     @session.on("user_state_changed")
     def _on_user_state_changed(ev: UserStateChangedEvent):
         try:
             if getattr(session.userdata, 'is_passive_mode', False) and ev.new_state == "away":
-                # Run in background to avoid blocking event loop
                 async def _auto_exit():
                     logger.info("[SILENCE EXIT] Sustained silence detected; exiting passive mode")
                     session.userdata.is_passive_mode = False
@@ -965,69 +1036,17 @@ async def console_entrypoint(ctx: JobContext):
                         logger.debug("[PASSIVE AUDIO] Output audio re-enabled on silence exit")
                     except Exception as e:
                         logger.error(f"[PASSIVE AUDIO] Failed to re-enable output audio: {e}")
-                    await agent._exit_passive_mode_and_summarize()
+                    # await agent._exit_passive_mode_and_summarize()  # [REDUNDANT] - method not defined
                 asyncio.create_task(_auto_exit())
         except Exception as e:
             logger.error(f"[SILENCE EXIT] Handler error: {e}")
 
     await session.start(
         agent=agent,
-        room=ctx.room
-    )
-
-# Production entrypoint (with TTS auto-detection)
-async def production_entrypoint(ctx: JobContext):
-    """Production entrypoint with TTS auto-detection"""
-    # Check if this is an outbound followup call
-    if ctx.job and ctx.job.metadata:
-        try:
-            import json
-            metadata = json.loads(ctx.job.metadata)
-            
-            # If there's call_schedule_item metadata, this is an outbound followup call
-            if metadata.get("call_schedule_item"):
-                logger.info("Routing to followup workflow for outbound call")
-                from followup.agents import scheduled_followup_entrypoint
-                return await scheduled_followup_entrypoint(ctx)
-                
-        except (json.JSONDecodeError, KeyError):
-            # If metadata parsing fails, default to discharge workflow
-            pass
-    
-    # Default to discharge workflow with auto-detected TTS
-    logger.info("Routing to discharge workflow for inbound call")
-    await ctx.connect()
-    
-    session = AgentSession[SessionData](
-        userdata=SessionData(),
-        user_away_timeout=30.0
-    )
-    agent = DischargeAgent()  # Uses ElevenLabs TTS in production
-    
-    # Add idle/silence handler
-    from livekit.agents import UserStateChangedEvent
-    @session.on("user_state_changed")
-    def _on_user_state_changed(ev: UserStateChangedEvent):
-        try:
-            if getattr(session.userdata, 'is_passive_mode', False) and ev.new_state == "away":
-                async def _auto_exit():
-                    logger.info("[SILENCE EXIT] Sustained silence detected; exiting passive mode")
-                    session.userdata.is_passive_mode = False
-                    agent._tts_suppressed = False
-                    # Re-enable audio output for summary
-                    try:
-                        session.output.set_audio_enabled(True)
-                        logger.debug("[PASSIVE AUDIO] Output audio re-enabled on silence exit")
-                    except Exception as e:
-                        logger.error(f"[PASSIVE AUDIO] Failed to re-enable output audio: {e}")
-                    await agent._exit_passive_mode_and_summarize()
-                asyncio.create_task(_auto_exit())
-        except Exception as e:
-            logger.error(f"[SILENCE EXIT] Handler error: {e}")
-
-    await session.start(
-        agent=agent,
-        room=ctx.room
+        room=ctx.room,
+        room_input_options=RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVC()
+        )
     )
 
 # Main entry point
@@ -1039,34 +1058,22 @@ def main():
     # Health endpoint is started by `agent/main.py` in non-console mode
     
     try:
-        # Handle console mode vs production mode
+        # Check for required OpenAI key
+        if not os.getenv("OPENAI_API_KEY"):
+            print("❌ OPENAI_API_KEY required. Exiting...")
+            sys.exit(1)
+
+        # Display mode information
         if is_console_mode():
             print("🎯 Starting PostOp AI Discharge Workflow in Console Mode")
-            # Check for required OpenAI key
-            if not os.getenv("OPENAI_API_KEY"):
-                print("❌ Console mode requires OPENAI_API_KEY. Exiting...")
-                sys.exit(1)
-            
-            cli.run_app(WorkerOptions(
-                agent_name=LIVEKIT_AGENT_NAME,
-                entrypoint_fnc=console_entrypoint,
-                drain_timeout=60  # 60 seconds for faster Fly.io deployments
-            ))
         else:
             print("🚀 Starting PostOp AI Discharge Workflow in Production Mode")
-            # Production mode - check for required keys
-            if not os.getenv("OPENAI_API_KEY"):
-                print("❌ Production mode requires OPENAI_API_KEY. Exiting...")
-                sys.exit(1)
-            # Check for ElevenLabs API key
-            if not os.getenv("ELEVEN_API_KEY"):
-                print("⚠️ ELEVEN_API_KEY not set, using OpenAI TTS...")
-                
-            cli.run_app(WorkerOptions(
-                agent_name=LIVEKIT_AGENT_NAME,
-                entrypoint_fnc=production_entrypoint,
-                drain_timeout=60  # 60 seconds for faster Fly.io deployments
-            ))
+
+        cli.run_app(WorkerOptions(
+            agent_name=LIVEKIT_AGENT_NAME,
+            entrypoint_fnc=entrypoint,
+            drain_timeout=60  # 60 seconds for faster Fly.io deployments
+        ))
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:

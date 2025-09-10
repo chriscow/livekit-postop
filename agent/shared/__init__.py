@@ -2,15 +2,11 @@
 Shared utilities package for PostOp AI system
 
 Contains shared utilities used by multiple workflows:
-- RedisMemory: Memory management for patient data
-- prompt_manager: YAML-based prompt loading
+- email_service: Email functionality for sending summaries
 """
 
-from .memory import RedisMemory
-from .prompt_manager import prompt_manager
-# Removed TTS utils - now inlined where needed
+from .email_service import send_instruction_summary_email
 
 __all__ = [
-    'RedisMemory',
-    'prompt_manager'
+    'send_instruction_summary_email'
 ]

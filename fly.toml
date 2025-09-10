@@ -1,8 +1,4 @@
-# fly.toml app configuration file generated for postop on 2025-08-15T07:53:37-07:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
+# fly.toml app configuration file for PostOp NextJS frontend
 app = 'postop'
 primary_region = 'iad'
 kill_timeout = '5m0s'
@@ -15,14 +11,8 @@ kill_timeout = '5m0s'
   strategy = 'rolling'
 
 [env]
-  PYTHONUNBUFFERED = '1'
-  # Add your environment variables here:
-  # OPENAI_API_KEY = 'your-openai-api-key'
-  # LIVEKIT_URL = 'your-livekit-url'
-  # LIVEKIT_API_KEY = 'your-livekit-api-key' 
-  # LIVEKIT_API_SECRET = 'your-livekit-api-secret'
-  # LIVEKIT_AGENT_NAME = 'postop-ai'
-  # REDIS_URL = 'your-redis-url'
+  # NextJS environment variables
+  NODE_ENV = 'production'
 
 [http_service]
   internal_port = 3000
@@ -42,26 +32,7 @@ kill_timeout = '5m0s'
     port = 443
     handlers = ['tls', 'http']
 
-[[services]]
-  protocol = 'tcp'
-  internal_port = 8081
-
-  [[services.ports]]
-    port = 8081
-    handlers = ['http']
-
-[checks]
-  [checks.healthcheck]
-    port = 8081
-    type = 'http'
-    interval = '10s'
-    timeout = '5s'
-    grace_period = '10s'
-    method = 'GET'
-    path = '/health'
-    protocol = 'http'
-
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1

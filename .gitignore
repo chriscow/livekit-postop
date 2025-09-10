@@ -172,4 +172,7 @@
 **/agent/data/medical_rag/
 **/agent/.env*
 
-.local/
+# Local files
+**/agent/session_logs/
+/.local/
+

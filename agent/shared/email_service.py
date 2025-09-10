@@ -57,89 +57,96 @@ def _translate_text_with_openai(text: str, target_language: str) -> Optional[str
         return None
 
 
-def format_summary_for_sms(
+def format_email_content(
     instructions: List[Dict], 
     patient_name: Optional[str] = None,
     session_id: Optional[str] = None,
-    patient_language: Optional[str] = None
-) -> str:
+    patient_language: Optional[str] = None,
+    healthcare_provider_name: Optional[str] = None
+) -> tuple[str, str]:
     """
-    Format instruction summary for SMS-style delivery (concise, clear format)
+    Format instruction summary as personalized email content
     
     Args:
         instructions: List of instruction dictionaries with 'text' field
         patient_name: Patient's name to include in summary
         session_id: Session ID for tracking
         patient_language: Patient's preferred language for the summary
+        healthcare_provider_name: Name of the healthcare provider
         
     Returns:
-        SMS-formatted string suitable for text messaging
+        Tuple of (subject_line, email_body)
     """
     
-    # Header with patient name and timestamp
-    timestamp = datetime.now().strftime("%m/%d %I:%M%p")
+    # Get current date components
+    now = datetime.now()
+    month = now.strftime("%B")  # Full month name (January, February, etc.)
+    day = now.strftime("%d").lstrip('0')  # Day without leading zero
+    
+    provider_name = healthcare_provider_name or "your doctor"
+    patient_display_name = patient_name or "Patient"
     
     # Determine if translation is needed
     needs_translation = patient_language and patient_language.lower() != 'english'
     
-    # Create base content in English first
-    if needs_translation:
-        header = f"Discharge Summary - {patient_name or 'Patient'} ({timestamp})"
-        no_instructions_msg = "No discharge instructions were captured during this session."
-        footer_msg = "Questions? Call your healthcare provider."
-    else:
-        header = f"Discharge Summary - {patient_name or 'Patient'} ({timestamp})"
-        no_instructions_msg = "No discharge instructions were captured during this session."  
-        footer_msg = "Questions? Call your healthcare provider."
+    # Create subject line
+    subject_line = f"Maya from {provider_name}'s Office | Your Discharge Summary from {month} {day}"
     
-    # Handle no instructions case
+    # Create email body
     if not instructions or len(instructions) == 0:
-        base_message = f"{header}\n\n{no_instructions_msg}"
+        email_body = f"""Hi {patient_display_name},
+
+Great to meet you earlier today. As promised, here's your discharge summary from your conversation with {provider_name}'s office.
+
+No specific discharge instructions were captured during this session.
+
+If you have any questions, don't hesitate to call or text me anytime. I'm here 24/7 to make your recovery process as smooth as possible!
+
+Best,
+Maya"""
+    else:
+        # Build instruction list
+        instruction_lines = []
+        for idx, instruction in enumerate(instructions, 1):
+            if isinstance(instruction, dict):
+                text = instruction.get("text", "").strip()
+            else:
+                text = str(instruction).strip()
+                
+            if text:
+                instruction_lines.append(f"    {idx}. {text}")
         
-        if needs_translation:
-            try:
-                translated_message = _translate_text_with_openai(base_message, patient_language)
-                return translated_message if translated_message else base_message
-            except Exception as e:
-                logger.error(f"Translation failed: {e}")
-                return base_message
-        return base_message
-    
-    # Build concise instruction list
-    formatted_lines = [header, ""]
-    
-    for idx, instruction in enumerate(instructions, 1):
-        if isinstance(instruction, dict):
-            text = instruction.get("text", "").strip()
-        else:
-            text = str(instruction).strip()
-            
-        if text:
-            # Keep instructions concise for SMS - truncate if too long
-            if len(text) > 120:
-                text = text[:117] + "..."
-            formatted_lines.append(f"{idx}. {text}")
-    
-    # Add footer
-    formatted_lines.append("")
-    formatted_lines.append(footer_msg)
-    
-    # Join with newlines and ensure total length is reasonable for SMS gateways
-    full_message = "\n".join(formatted_lines)
+        instructions_text = "\n".join(instruction_lines)
+        
+        email_body = f"""Hi {patient_display_name},
+
+Great to meet you earlier today. As promised, here's your discharge summary from your conversation with {provider_name}'s office.
+
+{instructions_text}
+
+If you have any questions, don't hesitate to call or text me anytime. I'm here 24/7 to make your recovery process as smooth as possible!
+
+Best,
+Maya"""
     
     # Translate if needed
     if needs_translation:
         try:
-            translated_message = _translate_text_with_openai(full_message, patient_language)
-            full_message = translated_message if translated_message else full_message
+            # Translate subject line
+            translated_subject = _translate_text_with_openai(subject_line, patient_language)
+            if translated_subject:
+                subject_line = translated_subject
+            
+            # Translate email body
+            translated_body = _translate_text_with_openai(email_body, patient_language)
+            if translated_body:
+                email_body = translated_body
+                
         except Exception as e:
             logger.error(f"Translation failed: {e}")
             # Continue with English version if translation fails
     
-    # Log message length for monitoring
-    logger.debug(f"SMS-formatted summary length: {len(full_message)} characters")
-    
-    return full_message
+    return subject_line, email_body
 
 
 def send_instruction_summary_email(
@@ -150,11 +157,12 @@ def send_instruction_summary_email(
     gmail_app_password: Optional[str] = None,
     recipient_email: Optional[str] = None,
     patient_language: Optional[str] = None,
+    healthcare_provider_name: Optional[str] = None,
     smtp_server: str = "smtp.gmail.com",
     smtp_port: int = 587
 ) -> tuple[bool, str]:
     """
-    Send instruction summary via Gmail SMTP as SMS-formatted email
+    Send instruction summary via Gmail SMTP as personalized email
     
     Args:
         instructions: List of instruction dictionaries
@@ -164,6 +172,7 @@ def send_instruction_summary_email(
         gmail_app_password: Gmail app password (not regular password)
         recipient_email: Email address to send summary to
         patient_language: Patient's preferred language for the summary
+        healthcare_provider_name: Name of the healthcare provider
         smtp_server: SMTP server (default: smtp.gmail.com)
         smtp_port: SMTP port (default: 587)
         
@@ -178,22 +187,28 @@ def send_instruction_summary_email(
         return False, error_msg
     
     try:
-        # Format the summary for SMS
-        sms_content = format_summary_for_sms(instructions, patient_name, session_id, patient_language)
+        # Format the email content
+        subject_line, email_body = format_email_content(
+            instructions, 
+            patient_name, 
+            session_id, 
+            patient_language, 
+            healthcare_provider_name
+        )
         
         # Create email message
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = f"Discharge Summary - {patient_name or 'Patient'}"
+        msg['Subject'] = subject_line
         msg['From'] = gmail_username
         msg['To'] = recipient_email
         
-        # Create plain text version (primary for SMS gateways)
-        text_part = MIMEText(sms_content, 'plain')
+        # Create plain text version
+        text_part = MIMEText(email_body, 'plain')
         msg.attach(text_part)
         
-        # Create simple HTML version as fallback
-        html_content = sms_content.replace('\n', '<br>')
-        html_part = MIMEText(f"<pre>{html_content}</pre>", 'html')
+        # Create HTML version with proper formatting
+        html_body = email_body.replace('\n', '<br>')
+        html_part = MIMEText(f"<div style='font-family: Arial, sans-serif; font-size: 14px; line-height: 1.5;'>{html_body}</div>", 'html')
         msg.attach(html_part)
         
         # Connect to Gmail SMTP server
@@ -251,8 +266,9 @@ def test_email_configuration(
     """
     
     test_instructions = [
-        {"text": "Test instruction 1 - Take medication as prescribed"},
-        {"text": "Test instruction 2 - Follow up with doctor in 1 week"}
+        {"text": "Take Advil for the next three days."},
+        {"text": "Call us if you see any swelling."},
+        {"text": "Do not shower for the first twenty-four hours after surgery."}
     ]
     
     return send_instruction_summary_email(
@@ -263,6 +279,7 @@ def test_email_configuration(
         gmail_app_password=gmail_app_password,
         recipient_email=recipient_email,
         patient_language="English",
+        healthcare_provider_name="Dr. Test",
         smtp_server=smtp_server,
         smtp_port=smtp_port
     )

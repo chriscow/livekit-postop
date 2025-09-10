@@ -23,7 +23,7 @@ LIVEKIT_AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME")   # LiveKit registration na
 # Validate LIVEKIT_AGENT_NAME but don't prevent module loading
 if not LIVEKIT_AGENT_NAME:
     # Set a default to prevent import errors, but log the issue
-    LIVEKIT_AGENT_NAME = "postop-ai-default"
+    LIVEKIT_AGENT_NAME = "postop-ai"
     import warnings
     warnings.warn("LIVEKIT_AGENT_NAME environment variable not set, using default: postop-ai-default")
 
