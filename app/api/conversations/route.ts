@@ -1,74 +1,83 @@
 import { NextResponse } from 'next/server';
-import { createClient } from 'redis';
+import { Pool } from 'pg';
 
-// Redis client setup
-let redisClient: ReturnType<typeof createClient> | null = null;
+// PostgreSQL client setup
+let pgPool: Pool | null = null;
 
-async function getRedisClient() {
-  if (!redisClient) {
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-    redisClient = createClient({ url: redisUrl });
-    await redisClient.connect();
+async function getPgPool() {
+  if (!pgPool) {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error('DATABASE_URL environment variable not set');
+    }
+    pgPool = new Pool({ connectionString: databaseUrl });
   }
-  return redisClient;
+  return pgPool;
 }
 
 export type ConversationSummary = {
   sessionId: string;
   messageCount: number;
+  instructionCount: number;
+  patientName?: string;
+  patientLanguage?: string;
   firstMessage?: string;
   lastMessage?: string;
-  startTime?: number;
-  endTime?: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export async function GET() {
   try {
-    const redis = await getRedisClient();
+    const pool = await getPgPool();
 
-    // Get all session IDs
-    const sessionIds = await redis.sMembers('postop:conversations:sessions');
+    // Query sessions with computed message and instruction counts
+    const query = `
+      SELECT
+        session_id,
+        timestamp,
+        patient_name,
+        patient_language,
+        jsonb_array_length(transcript) as message_count,
+        jsonb_array_length(collected_instructions) as instruction_count,
+        created_at,
+        updated_at,
+        transcript
+      FROM sessions
+      ORDER BY created_at DESC
+      LIMIT 50
+    `;
 
-    // Get summary data for each session
+    const result = await pool.query(query);
     const conversations: ConversationSummary[] = [];
 
-    for (const sessionId of sessionIds) {
-      const conversationKey = `postop:conversations:${sessionId}`;
-      const messages = await redis.lRange(conversationKey, 0, -1);
+    for (const row of result.rows) {
+      const transcript = row.transcript || [];
 
-      if (messages.length === 0) continue;
+      // Extract first and last messages from transcript
+      let firstMessage = '';
+      let lastMessage = '';
 
-      // Parse messages to get timestamps and content
-      const parsedMessages = messages
-        .map((msg: string) => {
-          try {
-            return JSON.parse(msg);
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean);
-
-      if (parsedMessages.length === 0) continue;
-
-      // Sort by timestamp (Redis lpush stores in reverse order)
-      parsedMessages.sort((a, b) => a.timestamp - b.timestamp);
-
-      const firstMsg = parsedMessages[0];
-      const lastMsg = parsedMessages[parsedMessages.length - 1];
+      if (transcript.length > 0) {
+        const userMessages = transcript.filter((msg: any) => msg.role === 'user');
+        if (userMessages.length > 0) {
+          firstMessage = userMessages[0]?.content?.substring(0, 100) || '';
+          lastMessage = userMessages[userMessages.length - 1]?.content?.substring(0, 100) || '';
+        }
+      }
 
       conversations.push({
-        sessionId,
-        messageCount: parsedMessages.length,
-        firstMessage: firstMsg?.message?.substring(0, 100) || '',
-        lastMessage: lastMsg?.message?.substring(0, 100) || '',
-        startTime: firstMsg?.timestamp,
-        endTime: lastMsg?.timestamp,
+        sessionId: row.session_id,
+        messageCount: row.message_count || 0,
+        instructionCount: row.instruction_count || 0,
+        patientName: row.patient_name,
+        patientLanguage: row.patient_language,
+        firstMessage,
+        lastMessage,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
       });
     }
-
-    // Sort conversations by start time (most recent first)
-    conversations.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
 
     return NextResponse.json(conversations);
   } catch (error) {

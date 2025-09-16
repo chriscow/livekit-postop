@@ -1,16 +1,49 @@
+# Short answer: there are two related mechanisms.
+
+# - .env auto-load (substitution): Docker Compose automatically reads a `.env` file that sits next to your `docker-compose.yaml` (here: `agent/.env`). Those values are used to resolve `${VAR}` placeholders in the compose file.
+# - env_file (container env): Adding `env_file: .env` tells Compose to also inject the key/value pairs into the container’s environment at runtime, even if you don’t list each one under `environment:`.
+
+# What we did:
+# - We kept `${POSTGRES_*}` placeholders in `environment:` so Compose substitutes them from `.env` (or your shell) when building the service config.
+# - We added `env_file: .env` so the same variables are also available inside the containers without listing them all.
+
+# Precedence (highest to lowest):
+# - `environment:` entries in `docker-compose.yaml`
+# - `env_file` values
+# - `ENV` in the Dockerfile
+# - For substitution only: shell environment overrides `.env`
+
+# How to use:
+# 1. From `livekit-postop/agent`:
+#    - `cp .env.example .env`
+#    - Edit `agent/.env` with your secrets.
+# 2. Start: `docker compose up -d` (or `docker-compose up
+#
+#
 version: '3.8'
 services:
   postgres:
     image: postgres:latest
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: Aces_Over_8's
-      POSTGRES_DB: postop
+    env_file:
+      - .env
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+
+  livekit-agent:
+    build: .
+    working_dir: /app
+    command: python3 -m discharge.agents start
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
 
 volumes:
   postgres_data:

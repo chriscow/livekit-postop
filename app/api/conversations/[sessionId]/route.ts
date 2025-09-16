@@ -1,32 +1,37 @@
 import { NextResponse } from 'next/server';
-import { createClient } from 'redis';
+import { Pool } from 'pg';
 
-// Redis client setup
-let redisClient: ReturnType<typeof createClient> | null = null;
+// PostgreSQL client setup
+let pgPool: Pool | null = null;
 
-async function getRedisClient() {
-  if (!redisClient) {
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-    redisClient = createClient({ url: redisUrl });
-    await redisClient.connect();
+async function getPgPool() {
+  if (!pgPool) {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error('DATABASE_URL environment variable not set');
+    }
+    pgPool = new Pool({ connectionString: databaseUrl });
   }
-  return redisClient;
+  return pgPool;
 }
 
 export type ConversationMessage = {
-  timestamp: number;
-  role: 'user' | 'assistant';
-  message: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
   formattedTime?: string;
 };
 
 export type ConversationDetails = {
   sessionId: string;
+  timestamp: string;
+  patientName?: string;
+  patientLanguage?: string;
   messages: ConversationMessage[];
+  collectedInstructions: any[];
   messageCount: number;
-  startTime: number;
-  endTime: number;
-  duration: number; // in seconds
+  instructionCount: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export async function GET(
@@ -35,49 +40,53 @@ export async function GET(
 ) {
   try {
     const { sessionId } = await params;
-    const redis = await getRedisClient();
+    const pool = await getPgPool();
 
-    // Get all messages for this conversation
-    const conversationKey = `postop:conversations:${sessionId}`;
-    const messages = await redis.lRange(conversationKey, 0, -1);
+    // Get session data from PostgreSQL
+    const query = `
+      SELECT
+        session_id,
+        timestamp,
+        patient_name,
+        patient_language,
+        transcript,
+        collected_instructions,
+        jsonb_array_length(transcript) as message_count,
+        jsonb_array_length(collected_instructions) as instruction_count,
+        created_at,
+        updated_at
+      FROM sessions
+      WHERE session_id = $1
+    `;
 
-    if (messages.length === 0) {
+    const result = await pool.query(query, [sessionId]);
+
+    if (result.rows.length === 0) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
-    // Parse and sort messages by timestamp
-    const parsedMessages: ConversationMessage[] = messages
-      .map((msg: string) => {
-        try {
-          const parsed = JSON.parse(msg);
-          return {
-            timestamp: parsed.timestamp,
-            role: parsed.role,
-            message: parsed.message,
-            formattedTime: new Date(parsed.timestamp * 1000).toLocaleString(),
-          } as ConversationMessage;
-        } catch {
-          return null;
-        }
-      })
-      .filter((msg: ConversationMessage | null): msg is ConversationMessage => msg !== null)
-      .sort((a: ConversationMessage, b: ConversationMessage) => a.timestamp - b.timestamp);
+    const row = result.rows[0];
+    const transcript = row.transcript || [];
+    const collectedInstructions = row.collected_instructions || [];
 
-    if (parsedMessages.length === 0) {
-      return NextResponse.json({ error: 'No valid messages found' }, { status: 404 });
-    }
-
-    const startTime = parsedMessages[0].timestamp;
-    const endTime = parsedMessages[parsedMessages.length - 1].timestamp;
-    const duration = endTime - startTime;
+    // Format messages with timestamps
+    const messages: ConversationMessage[] = transcript.map((msg: any) => ({
+      role: msg.role,
+      content: msg.content,
+      formattedTime: msg.timestamp ? new Date(msg.timestamp).toLocaleString() : undefined,
+    }));
 
     const conversationDetails: ConversationDetails = {
-      sessionId,
-      messages: parsedMessages,
-      messageCount: parsedMessages.length,
-      startTime,
-      endTime,
-      duration,
+      sessionId: row.session_id,
+      timestamp: row.timestamp,
+      patientName: row.patient_name,
+      patientLanguage: row.patient_language,
+      messages,
+      collectedInstructions,
+      messageCount: row.message_count || 0,
+      instructionCount: row.instruction_count || 0,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     };
 
     return NextResponse.json(conversationDetails);
@@ -93,26 +102,24 @@ export async function DELETE(
 ) {
   try {
     const { sessionId } = await params;
-    const redis = await getRedisClient();
+    const pool = await getPgPool();
 
-    const conversationKey = `postop:conversations:${sessionId}`;
-    const sessionsSetKey = 'postop:conversations:sessions';
+    // Check if conversation exists and delete it
+    const deleteQuery = `
+      DELETE FROM sessions
+      WHERE session_id = $1
+      RETURNING session_id
+    `;
 
-    // Check if conversation exists
-    const messageCount = await redis.lLen(conversationKey);
-    if (messageCount === 0) {
+    const result = await pool.query(deleteQuery, [sessionId]);
+
+    if (result.rows.length === 0) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
-    // Delete the conversation messages and remove from sessions set
-    const pipeline = redis.multi();
-    pipeline.del(conversationKey);
-    pipeline.sRem(sessionsSetKey, sessionId);
-    await pipeline.exec();
-
     return NextResponse.json({
       message: 'Conversation deleted successfully',
-      sessionId,
+      sessionId: result.rows[0].session_id,
     });
   } catch (error) {
     console.error('Failed to delete conversation:', error);
