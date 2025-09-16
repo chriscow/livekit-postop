@@ -14,6 +14,9 @@ livekit-plugins-hume==1.2.5
 rq==2.4.1
 rq-scheduler==0.14.0
 
+# Database
+asyncpg==0.29.0
+
 # Medical knowledge storage uses Redis (no additional dependencies needed)
 
 # Testing

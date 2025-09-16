@@ -118,7 +118,7 @@ from livekit.plugins import deepgram, openai, silero
 from livekit.plugins import noise_cancellation
 
 from .config import LIVEKIT_AGENT_NAME, GMAIL_USERNAME, GMAIL_APP_PASSWORD, SUMMARY_EMAIL_RECIPIENT
-from shared import send_instruction_summary_email
+from shared import send_instruction_summary_email, get_database, close_database
 
 logger = logging.getLogger("postop-agent")
 
@@ -267,7 +267,8 @@ Think step-by-step about whether each message contains discharge instructions or
         self._original_say = None # we monkey patch say and generate_reply to log all output
         self._original_generate_reply = None
         self._tts_suppressed = False  # TTS suppression during passive mode
-        
+        self._database = None  # PostgreSQL database connection
+
         # Create a lightweight OpenAI async client for custom calls (reuses env OPENAI_API_KEY)
         try:
             from livekit.plugins.openai import openai as lk_openai
@@ -280,6 +281,14 @@ Think step-by-step about whether each message contains discharge instructions or
         session_id = f"session_{int(time.time())}"
         self.session.userdata.session_id = session_id
         logger.info(f"Discharge agent starting with session: {session_id}")
+
+        # Initialize database connection
+        try:
+            self._database = await get_database()
+            logger.info(f"[DATABASE] Connected for session: {session_id}")
+        except Exception as e:
+            logger.error(f"[DATABASE] Failed to connect for session {session_id}: {e}")
+            # Continue without database - fallback to file logging
 
         # Add system message to OpenAI conversation log
         system_instructions = (
@@ -312,12 +321,12 @@ Think step-by-step about whether each message contains discharge instructions or
         await self.session.say(f"Hi all! I'm Maya, thanks for dialing me in today. So {HEALTHCARE_PROVIDER_NAME}, who do we have in the room today?", allow_interruptions=False)
 
     async def on_exit(self):
-        """Handle session end - write conversation file"""
+        """Handle session end - save to database"""
         session_id = getattr(self.session.userdata, 'session_id', 'unknown')
         logger.info(f"Session ending: {session_id}")
 
-        # Write conversation file
-        self._write_conversation_file(session_id)
+        # Save session to database
+        await self._save_session_to_database(session_id)
 
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         """Handle user speech completion with exit detection and TTS suppression during passive mode"""
@@ -378,6 +387,9 @@ Think step-by-step about whether each message contains discharge instructions or
         # Log tool call for OpenAI format
         self._log_tool_call("collect_instruction", {"instruction_text": instruction_text}, f"Collected instruction: {cleaned_text}")
 
+        # Update session data in database (async, non-blocking)
+        await self._update_session_data()
+
         # Stay silent in passive mode unless directly asked
         if ctx.userdata.workflow_mode == "passive_listening" and ctx.userdata.is_passive_mode:
             return None, None  # Silent collection
@@ -410,6 +422,9 @@ Think step-by-step about whether each message contains discharge instructions or
 
         # Mark as extracted so we don't try again
         ctx.userdata.patient_info_extracted = True
+
+        # Update session data in database
+        await self._update_session_data()
 
         if updates:
             return f"Extracted: {', '.join(updates)}"
@@ -957,37 +972,43 @@ If you need anything else, let me know. Otherwise feel free to hang up.
         except Exception as e:
             logger.error(f"Failed to log tool call {function_name}: {e}")
 
-    def _write_conversation_file(self, session_id: str):
-        """Write the OpenAI format conversation to a timestamped file"""
+    async def _save_session_to_database(self, session_id: str):
+        """Save session data to PostgreSQL database"""
         try:
-            import json
-            import os
+            if not self._database:
+                logger.warning(f"[DATABASE] No database connection for session {session_id}")
+                return
 
-            # Create logs directory if it doesn't exist
-            logs_dir = "session_logs"
-            os.makedirs(logs_dir, exist_ok=True)
-
-            # Create filename with timestamp
+            # Prepare session data
             timestamp = getattr(self.session.userdata, 'session_start_time', 'unknown')
-            filename = f"{logs_dir}/session_{timestamp}_{session_id}.json"
+            patient_name = getattr(self.session.userdata, 'patient_name', None)
+            patient_language = getattr(self.session.userdata, 'patient_language', None)
+            transcript = getattr(self.session.userdata, 'openai_conversation', [])
+            collected_instructions = getattr(self.session.userdata, 'collected_instructions', [])
 
-            # Prepare conversation data
-            conversation_data = {
-                "session_id": session_id,
-                "timestamp": timestamp,
-                "patient_name": getattr(self.session.userdata, 'patient_name', None),
-                "patient_language": getattr(self.session.userdata, 'patient_language', None),
-                "messages": getattr(self.session.userdata, 'openai_conversation', [])
-            }
+            # Save to database
+            success = await self._database.save_session(
+                session_id=session_id,
+                timestamp=timestamp,
+                patient_name=patient_name,
+                patient_language=patient_language,
+                transcript=transcript,
+                collected_instructions=collected_instructions
+            )
 
-            # Write to file
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(conversation_data, f, indent=2, ensure_ascii=False)
-
-            logger.info(f"[CONVERSATION FILE] Session: {session_id} | Conversation saved to {filename}")
+            if success:
+                logger.info(f"[DATABASE] Session {session_id} saved successfully")
+            else:
+                logger.error(f"[DATABASE] Failed to save session {session_id}")
 
         except Exception as e:
-            logger.error(f"Failed to write conversation file for session {session_id}: {e}")
+            logger.error(f"[DATABASE] Error saving session {session_id}: {e}")
+
+    async def _update_session_data(self):
+        """Update session data in database during conversation (non-blocking)"""
+        session_id = getattr(self.session.userdata, 'session_id', 'unknown')
+        # Save asynchronously without waiting
+        asyncio.create_task(self._save_session_to_database(session_id))
 
 
 # Unified entrypoint for both console and production modes
@@ -1053,10 +1074,29 @@ async def entrypoint(ctx: JobContext):
 def main():
     """Main function for running discharge workflow"""
     import sys
+    import signal
+
     # Environment variables are loaded in discharge.config module
-    
+
     # Health endpoint is started by `agent/main.py` in non-console mode
-    
+
+    # Setup cleanup handler
+    def cleanup_handler(signum=None, frame=None):
+        logger.info("Cleaning up resources...")
+        try:
+            # Use asyncio to properly close database connections
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(close_database())
+            else:
+                asyncio.run(close_database())
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, cleanup_handler)
+    signal.signal(signal.SIGTERM, cleanup_handler)
+
     try:
         # Check for required OpenAI key
         if not os.getenv("OPENAI_API_KEY"):
@@ -1076,9 +1116,13 @@ def main():
         ))
     except KeyboardInterrupt:
         logger.info("Shutting down...")
+        cleanup_handler()
+    except Exception as e:
+        logger.error(f"Application error: {e}")
+        cleanup_handler()
     finally:
-        # Health endpoint is managed by `agent/main.py`
-        pass
+        # Ensure cleanup happens
+        cleanup_handler()
 
 if __name__ == "__main__":
     main()
