@@ -118,7 +118,7 @@ from livekit.plugins import deepgram, openai, silero
 from livekit.plugins import noise_cancellation
 
 from .config import LIVEKIT_AGENT_NAME, GMAIL_USERNAME, GMAIL_APP_PASSWORD, SUMMARY_EMAIL_RECIPIENT
-from shared import send_instruction_summary_email, get_database, close_database
+from shared import send_instruction_summary_email, get_database, close_database, close_database_sync
 
 logger = logging.getLogger("postop-agent")
 
@@ -1084,12 +1084,9 @@ def main():
     def cleanup_handler(signum=None, frame=None):
         logger.info("Cleaning up resources...")
         try:
-            # Use asyncio to properly close database connections
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(close_database())
-            else:
-                asyncio.run(close_database())
+            # Use synchronous cleanup to avoid event loop conflicts
+            close_database_sync()
+            logger.info("Database cleanup completed")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
 

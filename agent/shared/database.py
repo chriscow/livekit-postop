@@ -231,5 +231,37 @@ async def close_database():
     global _db_instance
 
     if _db_instance:
-        await _db_instance.close()
-        _db_instance = None
+        try:
+            await _db_instance.close()
+        except Exception as e:
+            # Ignore errors during cleanup, just log them
+            logger.error(f"Error closing database during cleanup: {e}")
+        finally:
+            _db_instance = None
+
+
+def close_database_sync():
+    """Synchronous database cleanup for signal handlers"""
+    global _db_instance
+
+    if _db_instance and _db_instance.pool:
+        try:
+            # Force close the pool synchronously
+            import asyncio
+            if hasattr(_db_instance.pool, '_closed') and not _db_instance.pool._closed:
+                # Pool is still open, close it gracefully
+                try:
+                    loop = asyncio.get_running_loop()
+                    # Create task in existing loop
+                    loop.create_task(_db_instance.pool.close())
+                except RuntimeError:
+                    # No running loop, force terminate connections
+                    try:
+                        _db_instance.pool.terminate()
+                    except:
+                        pass
+        except Exception:
+            # Ignore all errors during forced cleanup
+            pass
+        finally:
+            _db_instance = None

@@ -7,11 +7,12 @@ Contains shared utilities used by multiple workflows:
 """
 
 from .email_service import send_instruction_summary_email
-from .database import get_database, close_database, SessionDatabase
+from .database import get_database, close_database, close_database_sync, SessionDatabase
 
 __all__ = [
     'send_instruction_summary_email',
     'get_database',
     'close_database',
+    'close_database_sync',
     'SessionDatabase'
 ]
