@@ -67,13 +67,18 @@ class SessionDatabase:
             transcript JSONB NOT NULL DEFAULT '[]',
             collected_instructions JSONB DEFAULT '[]',
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            is_evaluation BOOLEAN DEFAULT FALSE,
+            source_session_id VARCHAR(255),
+            evaluation_metadata JSONB DEFAULT '{}'
         );
 
         CREATE INDEX IF NOT EXISTS idx_sessions_timestamp ON sessions(timestamp);
         CREATE INDEX IF NOT EXISTS idx_sessions_patient_name ON sessions(patient_name);
         CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);
         CREATE INDEX IF NOT EXISTS idx_sessions_transcript_gin ON sessions USING GIN(transcript);
+        CREATE INDEX IF NOT EXISTS idx_sessions_is_evaluation ON sessions(is_evaluation);
+        CREATE INDEX IF NOT EXISTS idx_sessions_source_session_id ON sessions(source_session_id);
         """
 
         async with self.pool.acquire() as conn:
@@ -87,7 +92,10 @@ class SessionDatabase:
         patient_name: Optional[str] = None,
         patient_language: Optional[str] = None,
         transcript: List[Dict[str, Any]] = None,
-        collected_instructions: List[Dict[str, Any]] = None
+        collected_instructions: List[Dict[str, Any]] = None,
+        is_evaluation: bool = False,
+        source_session_id: Optional[str] = None,
+        evaluation_metadata: Dict[str, Any] = None
     ) -> bool:
         """
         Save or update session data in PostgreSQL
@@ -99,6 +107,9 @@ class SessionDatabase:
             patient_language: Patient's preferred language (optional)
             transcript: OpenAI format conversation messages (JSONB)
             collected_instructions: Captured discharge instructions (JSONB)
+            is_evaluation: Whether this is an evaluation run (default: False)
+            source_session_id: Original session ID if this is an evaluation (optional)
+            evaluation_metadata: Additional metadata for evaluation runs (optional)
 
         Returns:
             True if successful, False otherwise
@@ -107,13 +118,16 @@ class SessionDatabase:
             transcript = []
         if collected_instructions is None:
             collected_instructions = []
+        if evaluation_metadata is None:
+            evaluation_metadata = {}
 
         try:
             insert_query = """
             INSERT INTO sessions (
                 session_id, timestamp, patient_name, patient_language,
-                transcript, collected_instructions, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                transcript, collected_instructions, is_evaluation,
+                source_session_id, evaluation_metadata, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
             ON CONFLICT (session_id)
             DO UPDATE SET
                 timestamp = EXCLUDED.timestamp,
@@ -121,6 +135,9 @@ class SessionDatabase:
                 patient_language = EXCLUDED.patient_language,
                 transcript = EXCLUDED.transcript,
                 collected_instructions = EXCLUDED.collected_instructions,
+                is_evaluation = EXCLUDED.is_evaluation,
+                source_session_id = EXCLUDED.source_session_id,
+                evaluation_metadata = EXCLUDED.evaluation_metadata,
                 updated_at = NOW()
             """
 
@@ -132,7 +149,10 @@ class SessionDatabase:
                     patient_name,
                     patient_language,
                     json.dumps(transcript),
-                    json.dumps(collected_instructions)
+                    json.dumps(collected_instructions),
+                    is_evaluation,
+                    source_session_id,
+                    json.dumps(evaluation_metadata)
                 )
 
             logger.info(f"[DATABASE] Saved session {session_id}")
@@ -155,7 +175,8 @@ class SessionDatabase:
         try:
             query = """
             SELECT session_id, timestamp, patient_name, patient_language,
-                   transcript, collected_instructions, created_at, updated_at
+                   transcript, collected_instructions, created_at, updated_at,
+                   is_evaluation, source_session_id, evaluation_metadata
             FROM sessions
             WHERE session_id = $1
             """
@@ -172,7 +193,10 @@ class SessionDatabase:
                     "transcript": json.loads(row["transcript"]) if row["transcript"] else [],
                     "collected_instructions": json.loads(row["collected_instructions"]) if row["collected_instructions"] else [],
                     "created_at": row["created_at"],
-                    "updated_at": row["updated_at"]
+                    "updated_at": row["updated_at"],
+                    "is_evaluation": row["is_evaluation"],
+                    "source_session_id": row["source_session_id"],
+                    "evaluation_metadata": json.loads(row["evaluation_metadata"]) if row["evaluation_metadata"] else {}
                 }
             return None
 

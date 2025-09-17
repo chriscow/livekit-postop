@@ -129,6 +129,16 @@ def is_console_mode():
     """Check if running in console mode"""
     return len(sys.argv) > 1 and sys.argv[1] == "console"
 
+def is_chat_mode():
+    """Check if running in chat evaluation mode"""
+    return len(sys.argv) > 1 and sys.argv[1] == "chat"
+
+def get_chat_session_id():
+    """Extract session ID for replay mode (chat <session_id>)"""
+    if len(sys.argv) > 2 and sys.argv[1] == "chat":
+        return sys.argv[2]
+    return None
+
 @dataclass
 class SessionData:
     """Session data passed between agents"""
@@ -156,7 +166,196 @@ class SessionData:
         if self.session_start_time is None:
             from datetime import datetime
             self.session_start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+
+
+class MockChatSession:
+    """Mock session for chat evaluation mode - outputs to stdout with clean formatting"""
+
+    def __init__(self, session_id="eval_session"):
+        self.userdata = SessionData()
+        self.userdata.session_id = session_id
+        self.conversation_log = []
+        self._event_handlers = {}
+
+    async def say(self, message: str, allow_interruptions: bool = True):
+        """Output agent response to stdout with assistant prefix"""
+        print(f"assistant: {message}", flush=True)
+        self.conversation_log.append({"role": "assistant", "content": message})
+
+    async def generate_reply(self, instructions: str, allow_interruptions: bool = True):
+        """Generate response using OpenAI and output to stdout"""
+        # For chat mode, we'll use the existing agent logic but output directly
+        print(f"assistant: [Generating response based on: {instructions[:50]}...]", flush=True)
+        return type('MockResponse', (), {'text_content': instructions})()
+
+    def on(self, event_name: str):
+        """Mock event handler registration"""
+        def decorator(handler):
+            self._event_handlers[event_name] = handler
+            return handler
+        return decorator
+
+    @property
+    def output(self):
+        """Mock output object for audio control compatibility"""
+        return type('MockOutput', (), {
+            'set_audio_enabled': lambda enabled: None  # No-op for text mode
+        })()
+
+
+async def load_session_from_database(session_id: str):
+    """Load existing session from database for replay"""
+    try:
+        database = await get_database()
+        session_data = await database.get_session(session_id)
+
+        if not session_data:
+            print(f"ERROR: Session {session_id} not found in database", file=sys.stderr)
+            return None
+
+        # Extract user messages from the transcript
+        transcript = session_data.get('transcript', [])
+        user_messages = []
+
+        for message in transcript:
+            if isinstance(message, dict) and message.get('role') == 'user':
+                content = message.get('content', '').strip()
+                if content:
+                    user_messages.append(content)
+
+        print(f"Loaded session {session_id} with {len(user_messages)} user messages", file=sys.stderr)
+        return user_messages, session_data
+
+    except Exception as e:
+        print(f"ERROR: Failed to load session {session_id}: {e}", file=sys.stderr)
+        return None
+
+
+async def run_chat_interface():
+    """Run the chat evaluation interface"""
+    import sys
+    import logging
+
+    # Redirect all logging to stderr for clean stdout
+    logging.basicConfig(stream=sys.stderr, level=logging.WARNING,
+                       format='[%(levelname)s] %(message)s')
+
+    session_id = get_chat_session_id()
+
+    if session_id:
+        # Replay mode: load session from database
+        print(f"Loading session {session_id} for replay...", file=sys.stderr)
+        session_data = await load_session_from_database(session_id)
+
+        if not session_data:
+            return
+
+        user_messages, original_session = session_data
+
+        # Create mock session for replay
+        mock_session = MockChatSession(f"replay_{session_id}")
+        agent = DischargeAgent()
+
+        # Store mock session and patch methods without setting session property
+        agent._chat_mock_session = mock_session
+        agent._original_say = getattr(agent, '_original_say', None)
+        agent._original_generate_reply = getattr(agent, '_original_generate_reply', None)
+
+        # Monkey patch the session property access for our userdata
+        original_session_property = type(agent).session
+        def mock_session_property(self):
+            # Return a mock object that has our userdata and all required methods
+            return type('MockSession', (), {
+                'userdata': mock_session.userdata,
+                'say': mock_session.say,
+                'generate_reply': mock_session.generate_reply,
+                'output': mock_session.output,
+                'on': mock_session.on
+            })()
+
+        # Replace the session property temporarily
+        type(agent).session = property(mock_session_property)
+
+        print("=== SESSION REPLAY STARTED ===", file=sys.stderr)
+        print(f"Replaying {len(user_messages)} user messages from session {session_id}", file=sys.stderr)
+        print("=== CONVERSATION OUTPUT ===")
+
+        # Initialize agent
+        await agent.on_enter()
+
+        # Replay each user message
+        for i, message in enumerate(user_messages, 1):
+            print(f"user: {message}")
+
+            # Create mock ChatMessage for the agent
+            mock_message = type('MockMessage', (), {'text_content': message})()
+            mock_context = type('MockContext', (), {})()
+
+            # Process the message through the agent
+            try:
+                await agent.on_user_turn_completed(mock_context, mock_message)
+            except Exception as e:
+                print(f"ERROR processing message {i}: {e}", file=sys.stderr)
+
+        print("=== SESSION REPLAY COMPLETED ===", file=sys.stderr)
+
+        # Output evaluation summary
+        collected = getattr(mock_session.userdata, 'collected_instructions', [])
+        print(f"Instructions collected: {len(collected)}", file=sys.stderr)
+
+        # Restore original session property
+        type(agent).session = original_session_property
+
+    else:
+        # Interactive mode: manual input
+        print("Starting interactive chat mode...", file=sys.stderr)
+        print("Type 'quit', 'exit', or '/quit' to end session", file=sys.stderr)
+        print("=== INTERACTIVE CHAT ===")
+
+        mock_session = MockChatSession("interactive_session")
+        agent = DischargeAgent()
+
+        # Use the working session property patching approach
+        original_session_property = type(agent).session
+        def mock_session_property(self):
+            return type('MockSession', (), {
+                'userdata': mock_session.userdata,
+                'say': mock_session.say,
+                'generate_reply': mock_session.generate_reply,
+                'output': mock_session.output,
+                'on': mock_session.on
+            })()
+
+        type(agent).session = property(mock_session_property)
+
+        await agent.on_enter()
+
+        try:
+            while True:
+                user_input = input("user: ")
+
+                if user_input.lower() in ['quit', 'exit', '/quit']:
+                    print("assistant: Goodbye!", flush=True)
+                    break
+
+                # Process message through agent
+                mock_message = type('MockMessage', (), {'text_content': user_input})()
+                mock_context = type('MockContext', (), {})()
+
+                try:
+                    await agent.on_user_turn_completed(mock_context, mock_message)
+                except Exception as e:
+                    print(f"ERROR: {e}", file=sys.stderr)
+
+        except KeyboardInterrupt:
+            print("assistant: Session interrupted. Goodbye!", flush=True)
+
+        # Cleanup
+        await agent.on_exit()
+
+        # Restore original session property (for interactive mode)
+        type(agent).session = original_session_property
+
 
 
 class DischargeAgent(Agent):
@@ -1100,7 +1299,19 @@ def main():
             print("❌ OPENAI_API_KEY required. Exiting...")
             sys.exit(1)
 
-        # Display mode information
+        # Handle chat evaluation mode
+        if is_chat_mode():
+            print("💬 Starting PostOp AI Chat Evaluation Mode", file=sys.stderr)
+            session_id = get_chat_session_id()
+            if session_id:
+                print(f"📁 Replaying session: {session_id}", file=sys.stderr)
+            else:
+                print("⌨️  Interactive mode - type messages to chat", file=sys.stderr)
+
+            asyncio.run(run_chat_interface())
+            return
+
+        # Display mode information for normal modes
         if is_console_mode():
             print("🎯 Starting PostOp AI Discharge Workflow in Console Mode")
         else:
