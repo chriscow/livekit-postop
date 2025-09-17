@@ -119,6 +119,7 @@ from livekit.plugins import noise_cancellation
 
 from .config import LIVEKIT_AGENT_NAME, GMAIL_USERNAME, GMAIL_APP_PASSWORD, SUMMARY_EMAIL_RECIPIENT
 from shared import send_instruction_summary_email, get_database, close_database, close_database_sync
+from shared.diagnostics import get_diagnostic_info
 
 logger = logging.getLogger("postop-agent")
 
@@ -467,6 +468,7 @@ Think step-by-step about whether each message contains discharge instructions or
         self._original_generate_reply = None
         self._tts_suppressed = False  # TTS suppression during passive mode
         self._database = None  # PostgreSQL database connection
+        self._diagnostics = None  # System diagnostics info
 
         # Create a lightweight OpenAI async client for custom calls (reuses env OPENAI_API_KEY)
         try:
@@ -488,6 +490,19 @@ Think step-by-step about whether each message contains discharge instructions or
         except Exception as e:
             logger.error(f"[DATABASE] Failed to connect for session {session_id}: {e}")
             # Continue without database - fallback to file logging
+
+        # Initialize system diagnostics
+        try:
+            self._diagnostics = await get_diagnostic_info(['hostname', 'ip', 'database_stats'])
+            logger.info(f"[DIAGNOSTICS] System info loaded for session: {session_id}")
+            logger.info(f"[DIAGNOSTICS] Hostname: {self._diagnostics.get('hostname', 'Unknown')}")
+            logger.info(f"[DIAGNOSTICS] IP: {self._diagnostics.get('ip', 'Unknown')}")
+            db_stats = self._diagnostics.get('database_stats', {})
+            if not db_stats.get('error'):
+                logger.info(f"[DIAGNOSTICS] DB Sessions: {db_stats.get('total_sessions', 0)} total, {db_stats.get('organic_sessions', 0)} organic")
+        except Exception as e:
+            logger.warning(f"[DIAGNOSTICS] Failed to load system info for session {session_id}: {e}")
+            self._diagnostics = {}
 
         # Add system message to OpenAI conversation log
         system_instructions = (
@@ -928,6 +943,93 @@ If you need anything else, let me know. Otherwise feel free to hang up.
         else:
             logger.error(f"[EMAIL] Session: {session_id} | Email failed: {message}")
             return f"❌ Failed to send email: {message}"
+
+    @function_tool
+    async def get_system_diagnostics(self, ctx: RunContext[SessionData], info_types: list[str] = None) -> str:
+        """
+        Retrieve system diagnostic information.
+
+        Call this function when asked about system status, machine information,
+        or database statistics. You can request specific types of information
+        or get a general overview.
+
+        Args:
+            info_types: List of diagnostic types to retrieve. Available options:
+                       - 'hostname': Machine hostname
+                       - 'ip': Local IP address
+                       - 'disk_space': Available disk space
+                       - 'memory': Memory usage statistics
+                       - 'cpu': CPU usage and core count
+                       - 'database_stats': Database session counts
+                       - 'uptime': System uptime
+                       - 'load_average': System load averages
+                       If not specified, returns hostname, IP, and database stats.
+        """
+        session_id = getattr(ctx, 'session_id', 'unknown')
+        logger.info(f"[DIAGNOSTICS] Session: {session_id} | Requested info: {info_types or 'default'}")
+
+        try:
+            # Get fresh diagnostic information
+            diagnostics = await get_diagnostic_info(info_types)
+
+            if not diagnostics:
+                return "No diagnostic information available"
+
+            # Format the response based on what was requested
+            response_parts = []
+
+            if 'hostname' in diagnostics:
+                response_parts.append(f"Hostname: {diagnostics['hostname']}")
+
+            if 'ip' in diagnostics:
+                response_parts.append(f"IP Address: {diagnostics['ip']}")
+
+            if 'disk_space' in diagnostics:
+                disk = diagnostics['disk_space']
+                if 'error' not in disk:
+                    response_parts.append(f"Disk Space: {disk['free']} free of {disk['total']} ({disk['used_percent']} used)")
+
+            if 'memory' in diagnostics:
+                memory = diagnostics['memory']
+                if 'error' not in memory:
+                    response_parts.append(f"Memory: {memory['available']} available of {memory['total']} ({memory['used_percent']} used)")
+
+            if 'cpu' in diagnostics:
+                cpu = diagnostics['cpu']
+                if 'error' not in cpu:
+                    response_parts.append(f"CPU: {cpu['usage_percent']} usage, {cpu['count']} cores")
+
+            if 'uptime' in diagnostics:
+                response_parts.append(f"Uptime: {diagnostics['uptime']}")
+
+            if 'load_average' in diagnostics:
+                load = diagnostics['load_average']
+                if 'error' not in load:
+                    response_parts.append(f"Load Average: {load['1min']}, {load['5min']}, {load['15min']}")
+
+            if 'database_stats' in diagnostics:
+                db_stats = diagnostics['database_stats']
+                if 'error' not in db_stats:
+                    response_parts.append(
+                        f"Database: {db_stats['total_sessions']} total sessions "
+                        f"({db_stats['organic_sessions']} organic, {db_stats['evaluation_sessions']} evaluation), "
+                        f"{db_stats['sessions_with_messages']} with messages, "
+                        f"{db_stats['recent_sessions_24h']} in last 24h"
+                    )
+                else:
+                    response_parts.append(f"Database: {db_stats['error']}")
+
+            # Log tool call for OpenAI format
+            result = "; ".join(response_parts) if response_parts else "No information available"
+            self._log_tool_call("get_system_diagnostics", {"info_types": info_types}, result)
+
+            return result
+
+        except Exception as e:
+            error_msg = f"Failed to retrieve diagnostic information: {e}"
+            logger.error(f"[DIAGNOSTICS] Session: {session_id} | {error_msg}")
+            self._log_tool_call("get_system_diagnostics", {"info_types": info_types}, error_msg)
+            return error_msg
 
     def _is_maya_directly_addressed(self, message_lower: str) -> bool:
         """
