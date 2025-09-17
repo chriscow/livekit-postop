@@ -16,7 +16,13 @@ services:
       retries: 3
 
   postop-scheduler:
-    build: .
+    build:
+      context: ./agent
+      args:
+        - OPENAI_API_KEY=${OPENAI_API_KEY}
+        - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+        - ELEVEN_API_KEY=${ELEVEN_API_KEY}
+        - CARTESIA_API_KEY=${CARTESIA_API_KEY}
     container_name: postop-scheduler
     restart: unless-stopped
     depends_on:
@@ -36,7 +42,13 @@ services:
       - ./data:/app/data
 
   postop-agent:
-    build: .
+    build:
+      context: ./agent
+      args:
+        - OPENAI_API_KEY=${OPENAI_API_KEY}
+        - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+        - ELEVEN_API_KEY=${ELEVEN_API_KEY}
+        - CARTESIA_API_KEY=${CARTESIA_API_KEY}
     container_name: postop-agent
     restart: unless-stopped
     depends_on:
@@ -61,7 +73,13 @@ services:
     mem_limit: 3g
 
   postop-worker:
-    build: .
+    build:
+      context: ./agent
+      args:
+        - OPENAI_API_KEY=${OPENAI_API_KEY}
+        - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+        - ELEVEN_API_KEY=${ELEVEN_API_KEY}
+        - CARTESIA_API_KEY=${CARTESIA_API_KEY}
     container_name: postop-worker
     restart: unless-stopped
     depends_on:
