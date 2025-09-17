@@ -20,7 +20,6 @@
 # 2. Start: `docker compose up -d` (or `docker-compose up
 #
 #
-version: '3.8'
 services:
   postgres:
     image: postgres:latest
@@ -40,7 +39,6 @@ services:
         - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
         - ELEVEN_API_KEY=${ELEVEN_API_KEY}
         - CARTESIA_API_KEY=${CARTESIA_API_KEY}
-    working_dir: /app
     command: python3 -m discharge.agents start
     depends_on:
       - postgres
