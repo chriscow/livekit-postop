@@ -494,17 +494,17 @@ Think step-by-step about whether each message contains discharge instructions or
         self.session.userdata.session_id = session_id
         logger.info(f"Discharge agent starting with session: {session_id}")
 
-        # Initialize database connection with comprehensive diagnostics
+        # Initialize database connection with safe diagnostics
         try:
-            # Log database connection diagnostics
+            # Log database connection attempt (without sensitive data)
             database_url = os.getenv("DATABASE_URL", "NOT_SET")
             logger.info(f"[DATABASE] Connection attempt for session: {session_id}")
-            logger.info(f"[DATABASE] DATABASE_URL: {database_url}")
 
             if database_url == "NOT_SET":
                 logger.warning(f"[DATABASE] DATABASE_URL environment variable is not set")
             else:
-                # Parse and log connection details (safely)
+                logger.info(f"[DATABASE] DATABASE_URL is configured")
+                # Parse and log safe connection details only
                 if database_url.startswith("postgresql://"):
                     try:
                         from urllib.parse import urlparse
@@ -512,16 +512,15 @@ Think step-by-step about whether each message contains discharge instructions or
                         logger.info(f"[DATABASE] Host: {parsed.hostname}")
                         logger.info(f"[DATABASE] Port: {parsed.port}")
                         logger.info(f"[DATABASE] Database: {parsed.path}")
-                        logger.info(f"[DATABASE] User: {parsed.username}")
+                        # Do NOT log username or password
                     except Exception as parse_e:
-                        logger.warning(f"[DATABASE] Failed to parse DATABASE_URL: {parse_e}")
+                        logger.warning(f"[DATABASE] Failed to parse connection details: {parse_e}")
 
             self._database = await get_database()
             logger.info(f"[DATABASE] Successfully connected for session: {session_id}")
         except Exception as e:
             logger.error(f"[DATABASE] Failed to connect for session {session_id}: {e}")
             logger.error(f"[DATABASE] Connection error type: {type(e).__name__}")
-            logger.error(f"[DATABASE] Full error details: {str(e)}")
             # Continue without database - fallback to file logging
 
         # Initialize system diagnostics (non-blocking background task)
