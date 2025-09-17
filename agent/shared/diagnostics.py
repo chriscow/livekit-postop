@@ -143,28 +143,36 @@ class SystemDiagnostics:
             return {'error': 'Load average not available'}
 
     async def _get_database_stats(self) -> Dict[str, Any]:
-        """Get database statistics"""
+        """Get database statistics with timeout protection"""
         try:
-            db = await get_database()
+            # Add timeout to database connection and queries
+            db = await asyncio.wait_for(get_database(), timeout=5.0)
 
             async with db.pool.acquire() as conn:
-                # Get total conversation count
-                total_sessions = await conn.fetchval("SELECT COUNT(*) FROM sessions")
-
-                # Get evaluation session count
-                eval_sessions = await conn.fetchval(
-                    "SELECT COUNT(*) FROM sessions WHERE session_id LIKE 'eval_%' OR is_evaluation = true"
+                # Get total conversation count with timeout
+                total_sessions = await asyncio.wait_for(
+                    conn.fetchval("SELECT COUNT(*) FROM sessions"), timeout=3.0
                 )
 
-                # Get sessions with conversations
-                sessions_with_messages = await conn.fetchval(
-                    "SELECT COUNT(*) FROM sessions WHERE jsonb_array_length(transcript) > 0"
+                # Get evaluation session count with timeout
+                eval_sessions = await asyncio.wait_for(
+                    conn.fetchval(
+                        "SELECT COUNT(*) FROM sessions WHERE session_id LIKE 'eval_%' OR is_evaluation = true"
+                    ), timeout=3.0
                 )
 
-                # Get recent session count (last 24 hours)
-                recent_sessions = await conn.fetchval(
-                    """SELECT COUNT(*) FROM sessions
-                       WHERE created_at > NOW() - INTERVAL '24 hours'"""
+                # Get sessions with conversations with timeout
+                sessions_with_messages = await asyncio.wait_for(
+                    conn.fetchval("SELECT COUNT(*) FROM sessions WHERE jsonb_array_length(transcript) > 0"),
+                    timeout=3.0
+                )
+
+                # Get recent session count (last 24 hours) with timeout
+                recent_sessions = await asyncio.wait_for(
+                    conn.fetchval(
+                        """SELECT COUNT(*) FROM sessions
+                           WHERE created_at > NOW() - INTERVAL '24 hours'"""
+                    ), timeout=3.0
                 )
 
                 return {
@@ -175,6 +183,8 @@ class SystemDiagnostics:
                     'organic_sessions': total_sessions - eval_sessions
                 }
 
+        except asyncio.TimeoutError:
+            return {'error': 'Database query timed out'}
         except Exception as e:
             return {'error': f'Unable to get database stats: {e}'}
 

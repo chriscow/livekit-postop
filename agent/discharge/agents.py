@@ -491,18 +491,9 @@ Think step-by-step about whether each message contains discharge instructions or
             logger.error(f"[DATABASE] Failed to connect for session {session_id}: {e}")
             # Continue without database - fallback to file logging
 
-        # Initialize system diagnostics
-        try:
-            self._diagnostics = await get_diagnostic_info(['hostname', 'ip', 'database_stats'])
-            logger.info(f"[DIAGNOSTICS] System info loaded for session: {session_id}")
-            logger.info(f"[DIAGNOSTICS] Hostname: {self._diagnostics.get('hostname', 'Unknown')}")
-            logger.info(f"[DIAGNOSTICS] IP: {self._diagnostics.get('ip', 'Unknown')}")
-            db_stats = self._diagnostics.get('database_stats', {})
-            if not db_stats.get('error'):
-                logger.info(f"[DIAGNOSTICS] DB Sessions: {db_stats.get('total_sessions', 0)} total, {db_stats.get('organic_sessions', 0)} organic")
-        except Exception as e:
-            logger.warning(f"[DIAGNOSTICS] Failed to load system info for session {session_id}: {e}")
-            self._diagnostics = {}
+        # Initialize system diagnostics (non-blocking background task)
+        self._diagnostics = {}
+        asyncio.create_task(self._load_diagnostics_background(session_id))
 
         # Add system message to OpenAI conversation log
         system_instructions = (
@@ -1310,6 +1301,31 @@ If you need anything else, let me know. Otherwise feel free to hang up.
         session_id = getattr(self.session.userdata, 'session_id', 'unknown')
         # Save asynchronously without waiting
         asyncio.create_task(self._save_session_to_database(session_id))
+
+    async def _load_diagnostics_background(self, session_id: str):
+        """Load system diagnostics in background with timeout protection"""
+        try:
+            # Add timeout protection to prevent hanging
+            diagnostics = await asyncio.wait_for(
+                get_diagnostic_info(['hostname', 'ip', 'database_stats']),
+                timeout=10.0  # 10 second timeout
+            )
+
+            self._diagnostics = diagnostics
+            logger.info(f"[DIAGNOSTICS] Background load completed for session: {session_id}")
+            logger.info(f"[DIAGNOSTICS] Hostname: {diagnostics.get('hostname', 'Unknown')}")
+            logger.info(f"[DIAGNOSTICS] IP: {diagnostics.get('ip', 'Unknown')}")
+
+            db_stats = diagnostics.get('database_stats', {})
+            if not db_stats.get('error'):
+                logger.info(f"[DIAGNOSTICS] DB Sessions: {db_stats.get('total_sessions', 0)} total, {db_stats.get('organic_sessions', 0)} organic")
+
+        except asyncio.TimeoutError:
+            logger.warning(f"[DIAGNOSTICS] Background load timed out for session {session_id}")
+            self._diagnostics = {'error': 'Diagnostic load timed out'}
+        except Exception as e:
+            logger.warning(f"[DIAGNOSTICS] Background load failed for session {session_id}: {e}")
+            self._diagnostics = {'error': f'Diagnostic load failed: {e}'}
 
 
 # Unified entrypoint for both console and production modes
