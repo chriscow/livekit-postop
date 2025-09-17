@@ -377,6 +377,7 @@ You are Maya, an AI discharge assistant designed to capture medical discharge in
 - collect_instruction(instruction_text, instruction_type): Captures a discharge instruction
 - provide_instruction_summary(): Exits passive mode and provides summary
 - send_instruction_summary_email(): Sends the instruction summary via email
+- get_system_diagnostics(info_types): Provides system diagnostic information when requested
 
 ## CORE WORKFLOW
 
@@ -450,8 +451,18 @@ Do NOT send email until you have clear confirmation.
 
 ## DIRECT QUESTIONS
 
-If answering direct questions outside passive mode: be concise (≤2 sentences) and medically accurate. You must refer to the instructions you have captured. 
+If answering direct questions outside passive mode: be concise (≤2 sentences) and medically accurate. You must refer to the instructions you have captured.
 Never invent instructions - you must have captured them. Ask for clarification if needed.
+
+## SYSTEM DIAGNOSTICS
+
+When asked for system information, diagnostic data, hostname, IP address, disk space, memory usage, database statistics, or technical system details, use the get_system_diagnostics() function. Examples of diagnostic requests:
+- "What's the hostname?" → Call get_system_diagnostics(['hostname'])
+- "System information" → Call get_system_diagnostics() for basic info
+- "How many conversations are in the database?" → Call get_system_diagnostics(['database_stats'])
+- "What's the memory usage?" → Call get_system_diagnostics(['memory'])
+
+Available diagnostic types: hostname, ip, disk_space, memory, cpu, database_stats, uptime, load_average
 
 Think step-by-step about whether each message contains discharge instructions or whether it signals completion of the instruction-giving process.
 """
@@ -483,12 +494,34 @@ Think step-by-step about whether each message contains discharge instructions or
         self.session.userdata.session_id = session_id
         logger.info(f"Discharge agent starting with session: {session_id}")
 
-        # Initialize database connection
+        # Initialize database connection with comprehensive diagnostics
         try:
+            # Log database connection diagnostics
+            database_url = os.getenv("DATABASE_URL", "NOT_SET")
+            logger.info(f"[DATABASE] Connection attempt for session: {session_id}")
+            logger.info(f"[DATABASE] DATABASE_URL: {database_url}")
+
+            if database_url == "NOT_SET":
+                logger.warning(f"[DATABASE] DATABASE_URL environment variable is not set")
+            else:
+                # Parse and log connection details (safely)
+                if database_url.startswith("postgresql://"):
+                    try:
+                        from urllib.parse import urlparse
+                        parsed = urlparse(database_url)
+                        logger.info(f"[DATABASE] Host: {parsed.hostname}")
+                        logger.info(f"[DATABASE] Port: {parsed.port}")
+                        logger.info(f"[DATABASE] Database: {parsed.path}")
+                        logger.info(f"[DATABASE] User: {parsed.username}")
+                    except Exception as parse_e:
+                        logger.warning(f"[DATABASE] Failed to parse DATABASE_URL: {parse_e}")
+
             self._database = await get_database()
-            logger.info(f"[DATABASE] Connected for session: {session_id}")
+            logger.info(f"[DATABASE] Successfully connected for session: {session_id}")
         except Exception as e:
             logger.error(f"[DATABASE] Failed to connect for session {session_id}: {e}")
+            logger.error(f"[DATABASE] Connection error type: {type(e).__name__}")
+            logger.error(f"[DATABASE] Full error details: {str(e)}")
             # Continue without database - fallback to file logging
 
         # Initialize system diagnostics (non-blocking background task)
