@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Delete Evaluation Sessions Tool
+Delete All Conversations Tool
 
-Safely removes all evaluation sessions from the database.
+Safely removes ALL conversations/sessions from the database.
 Provides confirmation prompts and detailed reporting.
 """
 
@@ -21,12 +21,12 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 from shared.redis_database import get_database, close_database
 
 
-async def list_eval_sessions():
-    """List all evaluation sessions before deletion"""
+async def list_all_sessions():
+    """List all sessions before deletion"""
 
     try:
         db = await get_database()
-        eval_sessions = []
+        all_sessions = []
 
         # Get all session keys from Redis
         async for key in db.client.scan_iter(match="session:*"):
@@ -35,36 +35,32 @@ async def list_eval_sessions():
                 import json
                 session = json.loads(session_data) if isinstance(session_data, str) else session_data
 
-                # Check if it's an evaluation session
                 session_id = session.get('session_id', '')
-                is_evaluation = session.get('is_evaluation', False)
+                transcript = session.get('transcript', [])
+                instructions = session.get('collected_instructions', [])
+                created_at_str = session.get('created_at')
 
-                if session_id.startswith('eval_') or is_evaluation:
-                    transcript = session.get('transcript', [])
-                    instructions = session.get('collected_instructions', [])
-                    created_at_str = session.get('created_at')
-
-                    eval_sessions.append({
-                        'session_id': session_id,
-                        'timestamp': session.get('timestamp'),
-                        'created_at': datetime.fromisoformat(created_at_str) if created_at_str else None,
-                        'is_evaluation': is_evaluation,
-                        'source_session_id': session.get('source_session_id'),
-                        'message_count': len(transcript),
-                        'instruction_count': len(instructions)
-                    })
+                all_sessions.append({
+                    'session_id': session_id,
+                    'timestamp': session.get('timestamp'),
+                    'created_at': datetime.fromisoformat(created_at_str) if created_at_str else None,
+                    'patient_name': session.get('patient_name'),
+                    'is_evaluation': session.get('is_evaluation', False),
+                    'message_count': len(transcript),
+                    'instruction_count': len(instructions)
+                })
 
         # Sort by created_at DESC
-        eval_sessions.sort(key=lambda x: x['created_at'] or datetime.min, reverse=True)
-        return eval_sessions
+        all_sessions.sort(key=lambda x: x['created_at'] or datetime.min, reverse=True)
+        return all_sessions
 
     except Exception as e:
-        print(f"❌ Failed to list evaluation sessions: {e}")
+        print(f"❌ Failed to list sessions: {e}")
         return []
 
 
-async def delete_eval_sessions(session_ids):
-    """Delete specific evaluation sessions"""
+async def delete_all_sessions(session_ids):
+    """Delete all specified sessions"""
 
     try:
         db = await get_database()
@@ -85,7 +81,7 @@ async def delete_eval_sessions(session_ids):
         return deleted_count
 
     except Exception as e:
-        print(f"❌ Failed to delete evaluation sessions: {e}")
+        print(f"❌ Failed to delete sessions: {e}")
         return 0
 
 
@@ -93,22 +89,29 @@ def confirm_deletion(sessions):
     """Ask user for confirmation before deletion"""
 
     if not sessions:
-        print("ℹ️  No evaluation sessions found to delete.")
+        print("ℹ️  No conversations found to delete.")
         return False
 
-    print(f"\n⚠️  WARNING: About to delete {len(sessions)} evaluation sessions")
-    print("=" * 60)
-    print(f"{'Session ID':<35} {'Created':<19} {'Messages'}")
-    print("-" * 60)
+    print(f"\n⚠️  WARNING: About to delete ALL {len(sessions)} conversations")
+    print("=" * 70)
+    print(f"{'Session ID':<35} {'Created':<19} {'Patient':<15} {'Messages'}")
+    print("-" * 70)
 
     for session in sessions:
         session_id = session['session_id']
         created_at = session['created_at'].strftime("%Y-%m-%d %H:%M:%S") if session['created_at'] else "Unknown"
+        patient_name = session['patient_name'] or "Unknown"
         msg_count = session['message_count'] if session['message_count'] is not None else 0
+        eval_marker = " [EVAL]" if session['is_evaluation'] else ""
 
-        print(f"{session_id:<35} {created_at:<19} {msg_count}")
+        print(f"{session_id:<35} {created_at:<19} {patient_name:<15} {msg_count}{eval_marker}")
 
     print(f"\n🚨 This action cannot be undone!")
+    print("   This will delete ALL conversations including:")
+    print("   - Patient conversations")
+    print("   - Evaluation sessions")
+    print("   - All transcript data")
+    print("   - All collected instructions")
 
     while True:
         response = input("\nDo you want to proceed? (yes/no): ").strip().lower()
@@ -124,40 +127,40 @@ async def main():
     """Main deletion workflow with safety checks"""
 
     try:
-        print("🗑️  EVALUATION SESSION DELETION TOOL")
+        print("🗑️  DELETE ALL CONVERSATIONS TOOL")
         print("=" * 50)
 
-        # Step 1: List all evaluation sessions
-        print("📋 Scanning for evaluation sessions...")
-        eval_sessions = await list_eval_sessions()
+        # Step 1: List all sessions
+        print("📋 Scanning for all conversations...")
+        all_sessions = await list_all_sessions()
 
-        if not eval_sessions:
-            print("✅ No evaluation sessions found in database.")
+        if not all_sessions:
+            print("✅ No conversations found in database.")
             return True
 
         # Step 2: Show what will be deleted and confirm
-        if not confirm_deletion(eval_sessions):
+        if not confirm_deletion(all_sessions):
             print("❌ Deletion cancelled by user.")
             return False
 
         # Step 3: Perform deletion
-        print(f"\n🗑️  Deleting {len(eval_sessions)} evaluation sessions...")
-        session_ids = [s['session_id'] for s in eval_sessions]
-        deleted_count = await delete_eval_sessions(session_ids)
+        print(f"\n🗑️  Deleting {len(all_sessions)} conversations...")
+        session_ids = [s['session_id'] for s in all_sessions]
+        deleted_count = await delete_all_sessions(session_ids)
 
         # Step 4: Report results
         print(f"\n📊 DELETION RESULTS")
         print("=" * 30)
-        print(f"Sessions targeted: {len(eval_sessions)}")
+        print(f"Conversations targeted: {len(all_sessions)}")
         print(f"Successfully deleted: {deleted_count}")
-        print(f"Failed to delete: {len(eval_sessions) - deleted_count}")
+        print(f"Failed to delete: {len(all_sessions) - deleted_count}")
 
-        if deleted_count == len(eval_sessions):
-            print(f"\n✅ All evaluation sessions deleted successfully!")
+        if deleted_count == len(all_sessions):
+            print(f"\n✅ All conversations deleted successfully!")
         elif deleted_count > 0:
-            print(f"\n⚠️  Partial success: {deleted_count}/{len(eval_sessions)} sessions deleted")
+            print(f"\n⚠️  Partial success: {deleted_count}/{len(all_sessions)} conversations deleted")
         else:
-            print(f"\n❌ No sessions were deleted")
+            print(f"\n❌ No conversations were deleted")
 
         return deleted_count > 0
 

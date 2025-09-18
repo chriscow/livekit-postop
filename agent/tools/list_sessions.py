@@ -28,7 +28,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
 
-from shared.database import get_database, close_database
+from shared.redis_database import get_database, close_database
 
 
 def format_timestamp(timestamp_str: str, created_at: Optional[datetime] = None) -> str:
@@ -173,9 +173,9 @@ Examples:
         print("Warning: Large limits may be slow. Consider using a smaller value.", file=sys.stderr)
 
     # Check database configuration
-    if not os.getenv("DATABASE_URL"):
-        print("Error: DATABASE_URL environment variable not set", file=sys.stderr)
-        print("Please configure your PostgreSQL connection string", file=sys.stderr)
+    if not os.getenv("REDIS_URL"):
+        print("Error: REDIS_URL environment variable not set", file=sys.stderr)
+        print("Please configure your Redis connection string", file=sys.stderr)
         return 1
 
     # Run the session listing

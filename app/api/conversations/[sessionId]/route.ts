@@ -1,18 +1,19 @@
 import { NextResponse } from 'next/server';
-import { Pool } from 'pg';
+import { createClient } from 'redis';
 
-// PostgreSQL client setup
-let pgPool: Pool | null = null;
+// Redis client setup
+let redisClient: any = null;
 
-async function getPgPool() {
-  if (!pgPool) {
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error('DATABASE_URL environment variable not set');
+async function getRedisClient() {
+  if (!redisClient) {
+    const redisUrl = process.env.REDIS_URL;
+    if (!redisUrl) {
+      throw new Error('REDIS_URL environment variable not set');
     }
-    pgPool = new Pool({ connectionString: databaseUrl });
+    redisClient = createClient({ url: redisUrl });
+    await redisClient.connect();
   }
-  return pgPool;
+  return redisClient;
 }
 
 export type ConversationMessage = {
@@ -40,34 +41,19 @@ export async function GET(
 ) {
   try {
     const { sessionId } = await params;
-    const pool = await getPgPool();
+    const redis = await getRedisClient();
 
-    // Get session data from PostgreSQL
-    const query = `
-      SELECT
-        session_id,
-        timestamp,
-        patient_name,
-        patient_language,
-        transcript,
-        collected_instructions,
-        jsonb_array_length(transcript) as message_count,
-        jsonb_array_length(collected_instructions) as instruction_count,
-        created_at,
-        updated_at
-      FROM sessions
-      WHERE session_id = $1
-    `;
+    // Get session data from Redis
+    const sessionKey = `session:${sessionId}`;
+    const sessionData = await redis.get(sessionKey);
 
-    const result = await pool.query(query, [sessionId]);
-
-    if (result.rows.length === 0) {
+    if (!sessionData) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
-    const row = result.rows[0];
-    const transcript = row.transcript || [];
-    const collectedInstructions = row.collected_instructions || [];
+    const session = JSON.parse(sessionData);
+    const transcript = session.transcript || [];
+    const collectedInstructions = session.collected_instructions || [];
 
     // Format messages with timestamps
     const messages: ConversationMessage[] = transcript.map((msg: {role: string, content: string, timestamp?: string}) => ({
@@ -77,16 +63,16 @@ export async function GET(
     }));
 
     const conversationDetails: ConversationDetails = {
-      sessionId: row.session_id,
-      timestamp: row.timestamp,
-      patientName: row.patient_name,
-      patientLanguage: row.patient_language,
+      sessionId: session.session_id,
+      timestamp: session.timestamp,
+      patientName: session.patient_name,
+      patientLanguage: session.patient_language,
       messages,
       collectedInstructions,
-      messageCount: row.message_count || 0,
-      instructionCount: row.instruction_count || 0,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      messageCount: transcript.length || 0,
+      instructionCount: collectedInstructions.length || 0,
+      createdAt: session.created_at,
+      updatedAt: session.updated_at,
     };
 
     return NextResponse.json(conversationDetails);
@@ -102,24 +88,19 @@ export async function DELETE(
 ) {
   try {
     const { sessionId } = await params;
-    const pool = await getPgPool();
+    const redis = await getRedisClient();
 
     // Check if conversation exists and delete it
-    const deleteQuery = `
-      DELETE FROM sessions
-      WHERE session_id = $1
-      RETURNING session_id
-    `;
+    const sessionKey = `session:${sessionId}`;
+    const result = await redis.del(sessionKey);
 
-    const result = await pool.query(deleteQuery, [sessionId]);
-
-    if (result.rows.length === 0) {
+    if (result === 0) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
     return NextResponse.json({
       message: 'Conversation deleted successfully',
-      sessionId: result.rows[0].session_id,
+      sessionId: sessionId,
     });
   } catch (error) {
     console.error('Failed to delete conversation:', error);

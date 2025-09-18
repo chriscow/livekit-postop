@@ -667,6 +667,144 @@ cp .env.example .env
 nano .env  # Fill in your actual API keys and configuration
 ```
 
+### DigitalOcean Container Registry Authentication
+
+If using DigitalOcean Container Registry for deployment, you may encounter authentication issues where `doctl registry login` appears successful but `docker pull` fails with "unauthorized: authentication required". Here are the research-based solutions:
+
+#### Common Authentication Issues and Solutions
+
+**Issue**: `doctl registry login` succeeds but `docker pull` returns "Error response from daemon: unauthorized: authentication required"
+
+**Root Causes and Fixes**:
+
+1. **User Privilege Mismatch** (Most Common)
+   - **Problem**: Running `doctl` and `docker` with different privilege levels
+   - **Solution**: Ensure consistent user privileges between commands
+   - **For root users**: Use the direct API token method (see Method 2 below)
+
+2. **Snap Package Connection Issue** (Ubuntu)
+   - **Problem**: doctl installed via snap needs permission to connect to Docker
+   - **Solution**: Run `sudo snap connect doctl:dot-docker`
+
+3. **Docker Credential Store Conflicts**
+   - **Problem**: Existing credentials interfere with registry authentication
+   - **Solution**: Clear credentials and use alternative authentication method
+
+#### Automated Fix Script
+
+We've included debug and fix scripts in the project root:
+
+```bash
+# Debug authentication issues
+./debug-registry.sh
+
+# Try multiple fix methods automatically
+./fix-registry-auth.sh
+
+# For root users (most reliable method)
+./fix-root-auth.sh
+```
+
+#### Manual Authentication Methods
+
+**Method 1: Snap Connection Fix (Ubuntu)**
+```bash
+# Check if doctl is installed via snap
+snap list doctl
+
+# Connect doctl to Docker (if snap-installed)
+sudo snap connect doctl:dot-docker
+
+# Clear existing credentials and retry
+docker logout registry.digitalocean.com
+doctl registry login --expiry-seconds 3600
+docker pull registry.digitalocean.com/your-registry/your-image:latest
+```
+
+**Method 2: Direct API Token Authentication (Recommended for Root)**
+```bash
+# Extract API token from doctl config
+TOKEN=$(grep "access-token:" ~/.config/doctl/config.yaml | sed 's/.*access-token: *//')
+
+# Use token directly for Docker login
+echo "$TOKEN" | docker login registry.digitalocean.com --username="$TOKEN" --password-stdin
+
+# Test authentication
+docker pull registry.digitalocean.com/your-registry/your-image:latest
+```
+
+**Method 3: doctl registry docker-config**
+```bash
+# Generate Docker config directly
+mkdir -p ~/.docker
+doctl registry docker-config > ~/.docker/config.json
+
+# Test authentication
+docker pull registry.digitalocean.com/your-registry/your-image:latest
+```
+
+#### Production Deployment with Container Registry
+
+If building and pushing images to DigitalOcean Container Registry:
+
+```bash
+# Build images locally
+docker compose build
+
+# Tag for registry
+docker tag livekit-postop-livekit-agent registry.digitalocean.com/your-registry/livekit-agent:latest
+docker tag livekit-postop-postop registry.digitalocean.com/your-registry/postop-web:latest
+
+# Authenticate (use Method 2 for servers)
+doctl registry login
+
+# Push images
+docker push registry.digitalocean.com/your-registry/livekit-agent:latest
+docker push registry.digitalocean.com/your-registry/postop-web:latest
+
+# On production server, use Method 2 for authentication:
+TOKEN=$(grep "access-token:" ~/.config/doctl/config.yaml | sed 's/.*access-token: *//')
+echo "$TOKEN" | docker login registry.digitalocean.com --username="$TOKEN" --password-stdin
+
+# Pull and deploy
+docker compose -f docker-compose.prod.yaml pull
+docker compose -f docker-compose.prod.yaml up -d
+```
+
+#### Troubleshooting Tips
+
+**If authentication still fails:**
+
+1. **Verify Images Exist**:
+   ```bash
+   doctl registry repository list
+   doctl registry repository list-tags your-image-name
+   ```
+
+2. **Check Registry Permissions**:
+   - Ensure your DigitalOcean account has access to the registry
+   - Verify the registry is not set to private with restricted access
+
+3. **Test Manual Docker Login**:
+   ```bash
+   # Use your email and API token
+   docker login registry.digitalocean.com -u your-email@domain.com -p your-api-token
+   ```
+
+4. **Clear All Docker Credentials**:
+   ```bash
+   # Remove Docker config and start fresh
+   rm -f ~/.docker/config.json
+   docker logout registry.digitalocean.com
+   # Then retry authentication
+   ```
+
+**Expected Success Indicators**:
+- ✅ `docker pull` completes without "unauthorized" errors
+- ✅ Images download and extract successfully
+- ✅ `docker images` shows the pulled images
+- ✅ `docker compose pull` works for all services
+
 **Production Environment Variables:**
 
 ```bash

@@ -118,7 +118,8 @@ from livekit.plugins import deepgram, openai, silero
 from livekit.plugins import noise_cancellation
 
 from .config import LIVEKIT_AGENT_NAME, GMAIL_USERNAME, GMAIL_APP_PASSWORD, SUMMARY_EMAIL_RECIPIENT
-from shared import send_instruction_summary_email, get_database, close_database, close_database_sync
+from shared import send_instruction_summary_email
+from shared.redis_database import get_database, close_database, close_database_sync
 from shared.diagnostics import get_diagnostic_info
 
 logger = logging.getLogger("postop-agent")
@@ -494,33 +495,32 @@ Think step-by-step about whether each message contains discharge instructions or
         self.session.userdata.session_id = session_id
         logger.info(f"Discharge agent starting with session: {session_id}")
 
-        # Initialize database connection with safe diagnostics
+        # Initialize Redis database connection
         try:
-            # Log database connection attempt (without sensitive data)
-            database_url = os.getenv("DATABASE_URL", "NOT_SET")
-            logger.info(f"[DATABASE] Connection attempt for session: {session_id}")
+            # Log Redis connection attempt (without sensitive data)
+            redis_url = os.getenv("REDIS_URL", "NOT_SET")
+            logger.info(f"[REDIS] Connection attempt for session: {session_id}")
 
-            if database_url == "NOT_SET":
-                logger.warning(f"[DATABASE] DATABASE_URL environment variable is not set")
+            if redis_url == "NOT_SET":
+                logger.warning(f"[REDIS] REDIS_URL environment variable is not set")
             else:
-                logger.info(f"[DATABASE] DATABASE_URL is configured")
+                logger.info(f"[REDIS] REDIS_URL is configured")
                 # Parse and log safe connection details only
-                if database_url.startswith("postgresql://"):
+                if redis_url.startswith("redis://"):
                     try:
                         from urllib.parse import urlparse
-                        parsed = urlparse(database_url)
-                        logger.info(f"[DATABASE] Host: {parsed.hostname}")
-                        logger.info(f"[DATABASE] Port: {parsed.port}")
-                        logger.info(f"[DATABASE] Database: {parsed.path}")
+                        parsed = urlparse(redis_url)
+                        logger.info(f"[REDIS] Host: {parsed.hostname}")
+                        logger.info(f"[REDIS] Port: {parsed.port}")
                         # Do NOT log username or password
                     except Exception as parse_e:
-                        logger.warning(f"[DATABASE] Failed to parse connection details: {parse_e}")
+                        logger.warning(f"[REDIS] Failed to parse connection details: {parse_e}")
 
             self._database = await get_database()
-            logger.info(f"[DATABASE] Successfully connected for session: {session_id}")
+            logger.info(f"[REDIS] Successfully connected for session: {session_id}")
         except Exception as e:
-            logger.error(f"[DATABASE] Failed to connect for session {session_id}: {e}")
-            logger.error(f"[DATABASE] Connection error type: {type(e).__name__}")
+            logger.error(f"[REDIS] Failed to connect for session {session_id}: {e}")
+            logger.error(f"[REDIS] Connection error type: {type(e).__name__}")
             # Continue without database - fallback to file logging
 
         # Initialize system diagnostics (non-blocking background task)
@@ -528,16 +528,7 @@ Think step-by-step about whether each message contains discharge instructions or
         asyncio.create_task(self._load_diagnostics_background(session_id))
 
         # Add system message to OpenAI conversation log
-        system_instructions = (
-            "You are Maya, an AI discharge assistant.\n"
-            "GOAL: Capture ONLY true discharge instructions while in passive mode; ignore filler.\n\n"
-            "SIMPLE WORKFLOW:\n"
-            "1. Briefly introduce yourself and ask who is present in the room.\n"
-            "2. When the doctor responds, immediately call start_passive_listening.\n"
-            "3. Then silently capture discharge instructions.\n\n"
-            # ... (rest of instructions from self.instructions)
-        )
-        self._add_to_openai_conversation("system", system_instructions)
+        self._add_to_openai_conversation("system", self.instructions)
 
         # Set up logging wrapper for session.say and generate_reply
         self._original_say = self.session.say
@@ -555,7 +546,10 @@ Think step-by-step about whether each message contains discharge instructions or
                     logger.info(f"[on_conversation_item_added] Role: {event.item.role} | Text: '{response_text}'")
                     # Avoid duplicate logging here; wrappers handle persistence.
 
-        await self.session.say(f"Hi all! I'm Maya, thanks for dialing me in today. So {HEALTHCARE_PROVIDER_NAME}, who do we have in the room today?", allow_interruptions=False)
+        if is_console_mode():
+            await self.session.say(f"Hi all! So {HEALTHCARE_PROVIDER_NAME}, who do we have in the room today?")
+        else:
+            await self.session.say(f"Hi all! I'm Maya, thanks for dialing me in today. So {HEALTHCARE_PROVIDER_NAME}, who do we have in the room today?", allow_interruptions=False)
 
     async def on_exit(self):
         """Handle session end - save to database"""
@@ -634,7 +628,7 @@ Think step-by-step about whether each message contains discharge instructions or
             return None, "I've noted that instruction."
 
     @function_tool
-    async def extract_patient_info(self, ctx: RunContext[SessionData], patient_name: str = None, patient_language: str = None) -> str:
+    async def extract_patient_info(self, ctx: RunContext[SessionData], patient_name: str | None = None, patient_language: str | None = None) -> str:
         """
         Extract and store patient information from the conversation.
 
@@ -692,11 +686,14 @@ Think step-by-step about whether each message contains discharge instructions or
         # Log tool call for OpenAI format
         self._log_tool_call("start_passive_listening", {}, "Entered passive listening mode")
 
-        prompt = f"""
+        if is_console_mode():
+            await self.session.say(f"Thanks for letting me know, {HEALTHCARE_PROVIDER_NAME}. Please begin.")
+        else:
+            prompt = f"""
 Follow this script exactly as written, do NOT deviate:
 
 In English, please say:
-    "Thanks for letting me know, {HEALTHCARE_PROVIDER_NAME}"
+    "Thanks for letting me know, {HEALTHCARE_PROVIDER_NAME}."
 
 Then say in {patient_language}:
     "{ctx.userdata.patient_name}, it's a pleasure to meet you. My goal is to make
@@ -713,7 +710,7 @@ Finally please say in English:
     recap at the end to make sure I've noted everything correctly for {ctx.userdata.patient_name}."
             """
 
-        await self.session.generate_reply(instructions=prompt, allow_interruptions=False)
+            await self.session.generate_reply(instructions=prompt, allow_interruptions=False)
 
         # Mute audio output while in passive mode (prevent any TTS playback)
         try:
@@ -816,13 +813,11 @@ Finally please say in English:
         self._log_tool_call("provide_instruction_summary", {}, f"Provided summary of {len(dedup)} instructions")
 
         # Send deterministic summary first to avoid LLM drifting back into passive intro
+        logger.info(f"[WORKFLOW] Session: {session_id} | calling generate_reply for summary")
         await ctx.session.generate_reply(instructions=f"""
 Here are the discharge instructions you captured:\n{summary_block}
 
 If you didn't capture any, let them know in English.
-
-
-
 
 In English, read off the discharge instructions in this general structure:
 "Okay, here's what I captured.
@@ -836,7 +831,7 @@ Does that sound right?"
 The Patient's name is {ctx.userdata.patient_name or 'the patient'} and their native language is {ctx.userdata.patient_language or 'English'}.
 
 If the patient's native language is not English, ask {HEALTHCARE_PROVIDER_NAME}
-if they would like you to repeat the instructions in {ctx.userdata.patient_language or 'English'}.
+ask if they would like you to repeat the instructions in {ctx.userdata.patient_language or 'English'}.
 """)
 
         return "Exited passive listening mode and provided summary"
@@ -856,8 +851,38 @@ if they would like you to repeat the instructions in {ctx.userdata.patient_langu
         session_id = getattr(ctx.userdata, 'session_id', 'unknown')
         patient_name = getattr(ctx.userdata, 'patient_name', None)
 
-        await self.session.say(f"Give me one moment while I send the instruction summary.")
+
+        patient_language = getattr(ctx.userdata, 'patient_language', 'English')
+
+        if patient_language != 'English':
+            prompt = f"""
+First say in English: "Thanks for confirming and the instructions have been sent."
+
+Then in the patient's native language ({patient_language}) say:
+
+"{patient_name}, like I mentioned before, I'll send a summary to
+your email now for reference, and check-in on you over the next few days. If you
+have any questions, I'm only a text or phone call away."
+
+Then in English say:
+"Give me one moment while I send the instruction summary."
+            """
+        else:
+            prompt = f"""
+Thanks for confirming.
+
+{patient_name}, like I mentioned before, I'll send a summary to
+your email now for reference, and check-in on you over the next few days. If you
+have any questions, I'm only a text or phone call away.
+
+Give me one moment while I send the instruction summary.
+            """
+
+        logger.info(f"[EMAIL] Session: {session_id} | calling generate_reply for email summary")
+        await self.session.generate_reply(instructions=prompt, allow_interruptions=False)
+        logger.info(f"[EMAIL] Session: {session_id} | generate_reply for email summary completed")
         
+
         logger.info(f"[EMAIL] Session: {session_id} | Attempting to send instruction summary email")
         
         # Check if email is configured
@@ -934,35 +959,8 @@ if they would like you to repeat the instructions in {ctx.userdata.patient_langu
         if success:
             logger.info(f"[EMAIL] Session: {session_id} | Email sent successfully")
 
-            patient_language = getattr(ctx.userdata, 'patient_language', 'English')
 
-            if patient_language != 'English':
-                prompt = f"""
-First say in English: "Thanks for confirming and the instructions have been sent."
-
-Then in the patient's native language ({patient_language}) say:
-
-"{patient_name}, like I mentioned before, I'll send a summary to
-your email now for reference, and check-in on you over the next few days. If you
-have any questions, I'm only a text or phone call away."
-
-Then in English say:
-"If you need anything else, let me know. Otherwise feel free to hang up."
-                """
-            else:
-                prompt = f"""
-Thanks for confirming.
-
-{patient_name}, like I mentioned before, I'll send a summary to
-your email now for reference, and check-in on you over the next few days. If you
-have any questions, I'm only a text or phone call away.
-
-If you need anything else, let me know. Otherwise feel free to hang up.
-                """
-
-            await self.session.generate_reply(instructions=prompt, allow_interruptions=False)
-
-            return None
+            return "The instructions have been sent to your email. If you need anything else, let me know. Otherwise feel free to hang up."
         else:
             logger.error(f"[EMAIL] Session: {session_id} | Email failed: {message}")
             return f"❌ Failed to send email: {message}"
@@ -1297,10 +1295,10 @@ If you need anything else, let me know. Otherwise feel free to hang up.
             logger.error(f"Failed to log tool call {function_name}: {e}")
 
     async def _save_session_to_database(self, session_id: str):
-        """Save session data to PostgreSQL database"""
+        """Save session data to Redis database"""
         try:
             if not self._database:
-                logger.warning(f"[DATABASE] No database connection for session {session_id}")
+                logger.warning(f"[REDIS] No database connection for session {session_id}")
                 return
 
             # Prepare session data
@@ -1321,12 +1319,12 @@ If you need anything else, let me know. Otherwise feel free to hang up.
             )
 
             if success:
-                logger.info(f"[DATABASE] Session {session_id} saved successfully")
+                logger.info(f"[REDIS] Session {session_id} saved successfully")
             else:
-                logger.error(f"[DATABASE] Failed to save session {session_id}")
+                logger.error(f"[REDIS] Failed to save session {session_id}")
 
         except Exception as e:
-            logger.error(f"[DATABASE] Error saving session {session_id}: {e}")
+            logger.error(f"[REDIS] Error saving session {session_id}: {e}")
 
     async def _update_session_data(self):
         """Update session data in database during conversation (non-blocking)"""

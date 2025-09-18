@@ -29,7 +29,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
 
-from shared.database import get_database, close_database
+from shared.redis_database import get_database, close_database
 
 
 # ANSI Color Codes
@@ -367,8 +367,8 @@ Color Legend:
         return 1
 
     # Check database configuration
-    if not os.getenv("DATABASE_URL"):
-        print(colorize("Error: DATABASE_URL environment variable not set", Colors.ERROR, use_color), file=sys.stderr)
+    if not os.getenv("REDIS_URL"):
+        print(colorize("Error: REDIS_URL environment variable not set", Colors.ERROR, use_color), file=sys.stderr)
         return 1
 
     # View the session
