@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
 
   livekit-agent:
-    image: registry.digitalocean.com/your-registry-name/livekit-agent:latest
+    image: registry.digitalocean.com/postop-container-registry/livekit-agent:latest
     command: python3 -m discharge.agents start
     depends_on:
       - postgres
@@ -43,7 +43,7 @@ services:
       - POSTGRES_PORT=5432
 
   postop:
-    image: registry.digitalocean.com/your-registry-name/postop-web:latest
+    image: registry.digitalocean.com/postop-container-registry/postop-web:latest
     labels:
       - traefik.enable=true
       - traefik.http.routers.postop.rule=Host(`postop.stampede.dev`)
