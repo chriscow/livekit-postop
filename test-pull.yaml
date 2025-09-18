@@ -1,0 +1,8 @@
+services:
+  test-agent:
+    image: registry.digitalocean.com/postop-container-registry/livekit-agent:latest
+    command: echo "test"
+
+  test-web:
+    image: registry.digitalocean.com/postop-container-registry/postop-web:latest
+    command: echo "test"
