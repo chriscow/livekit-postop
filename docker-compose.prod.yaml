@@ -1,0 +1,63 @@
+# Production docker-compose that uses images from DigitalOcean Container Registry
+# Usage: docker compose -f docker-compose.prod.yaml up -d
+
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_acme:/acme
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:latest
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  livekit-agent:
+    image: registry.digitalocean.com/your-registry-name/livekit-agent:latest
+    command: python3 -m discharge.agents start
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+
+  postop:
+    image: registry.digitalocean.com/your-registry-name/postop-web:latest
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.postop.rule=Host(`postop.stampede.dev`)
+      - traefik.http.routers.postop.entrypoints=websecure
+      - traefik.http.routers.postop.tls.certresolver=letsencrypt
+      - traefik.http.services.postop.loadbalancer.server.port=3000
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+
+volumes:
+  postgres_data:
+  traefik_acme:
