@@ -27,7 +27,7 @@ export type ConversationDetails = {
   patientName?: string;
   patientLanguage?: string;
   messages: ConversationMessage[];
-  collectedInstructions: any[];
+  collectedInstructions: unknown[];
   messageCount: number;
   instructionCount: number;
   createdAt: string;
@@ -70,7 +70,7 @@ export async function GET(
     const collectedInstructions = row.collected_instructions || [];
 
     // Format messages with timestamps
-    const messages: ConversationMessage[] = transcript.map((msg: any) => ({
+    const messages: ConversationMessage[] = transcript.map((msg: {role: string, content: string, timestamp?: string}) => ({
       role: msg.role,
       content: msg.content,
       formattedTime: msg.timestamp ? new Date(msg.timestamp).toLocaleString() : undefined,

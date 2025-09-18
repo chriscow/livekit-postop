@@ -59,7 +59,7 @@ export async function GET() {
       let lastMessage = '';
 
       if (transcript.length > 0) {
-        const userMessages = transcript.filter((msg: any) => msg.role === 'user');
+        const userMessages = transcript.filter((msg: {role: string, content?: string}) => msg.role === 'user');
         if (userMessages.length > 0) {
           firstMessage = userMessages[0]?.content?.substring(0, 100) || '';
           lastMessage = userMessages[userMessages.length - 1]?.content?.substring(0, 100) || '';
