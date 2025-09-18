@@ -14,10 +14,10 @@
 # - For substitution only: shell environment overrides `.env`
 
 # How to use:
-# 1. From `livekit-postop/agent`:
-#    - `cp .env.example .env`
-#    - Edit `agent/.env` with your secrets.
-# 2. Start: `docker compose up -d` (or `docker-compose up
+# 1. From `livekit-postop/` (project root):
+#    - Ensure `.env` file exists with your secrets
+#    - Edit `.env` with your API keys and database settings
+# 2. Start: `docker compose up -d` (or `docker-compose up -d`)
 #
 #
 services:
@@ -31,7 +31,7 @@ services:
 
   livekit-agent:
     build:
-      context: .
+      context: ./agent
       args:
         - OPENAI_API_KEY=${OPENAI_API_KEY}
         - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
@@ -46,6 +46,20 @@ services:
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
 
 volumes:
   postgres_data:
