@@ -544,7 +544,9 @@ Think step-by-step about whether each message contains discharge instructions or
                 response_text = event.item.text_content or ""
                 if response_text.strip():
                     logger.info(f"[on_conversation_item_added] Role: {event.item.role} | Text: '{response_text}'")
-                    # Avoid duplicate logging here; wrappers handle persistence.
+                    # FIX: Persist to OpenAI conversation format for database storage
+                    # The wrappers don't handle generate_reply() responses properly due to SpeechHandle
+                    self._add_to_openai_conversation("assistant", response_text)
 
         if is_console_mode():
             await self.session.say(f"Hi all! So {HEALTHCARE_PROVIDER_NAME}, who do we have in the room today?")
@@ -569,6 +571,16 @@ Think step-by-step about whether each message contains discharge instructions or
         transcript_text = new_message.text_content or ""
         logger.info(f"[STT INPUT] Passive: {is_passive_mode} | {transcript_text}")
 
+        # DEBUG: Log instruction analysis for passive mode
+        if is_passive_mode and transcript_text.strip():
+            logger.info(f"[DEBUG PASSIVE] Analyzing: '{transcript_text}' for instruction collection")
+            # Log if this looks like a medical instruction that should be collected
+            medical_keywords = ['take', 'drink', 'get', 'rest', 'sleep', 'medication', 'bandage', 'water', 'hours', 'tylenol', 'remove', 'keep', 'avoid', 'follow', 'return', 'call']
+            has_medical_keywords = any(keyword in transcript_text.lower() for keyword in medical_keywords)
+            logger.info(f"[DEBUG PASSIVE] Contains medical keywords: {has_medical_keywords}")
+            if has_medical_keywords:
+                logger.warning(f"[DEBUG PASSIVE] This appears to be a medical instruction that should be collected: '{transcript_text}'")
+
         # Store conversation in OpenAI format for file logging
         if transcript_text.strip():  # Only log non-empty messages
             self._add_to_openai_conversation("user", transcript_text)
@@ -589,6 +601,9 @@ Think step-by-step about whether each message contains discharge instructions or
         # Check for near-duplicates before adding
         session_id = getattr(ctx.userdata, 'session_id', 'unknown')
         cleaned_text = instruction_text.strip()
+
+        # DEBUG: Log tool call details
+        logger.warning(f"[DEBUG COLLECT] Tool called with instruction: '{cleaned_text}' for session: {session_id}")
 
         # Log the instruction being collected
         logger.info(f"[COLLECT] {cleaned_text}")
@@ -814,6 +829,12 @@ Finally please say in English:
 
         # Send deterministic summary first to avoid LLM drifting back into passive intro
         logger.info(f"[WORKFLOW] Session: {session_id} | calling generate_reply for summary")
+
+        # DEBUG: Log what we're actually telling the LLM vs what it will likely output
+        logger.warning(f"[DEBUG SUMMARY] Collected instructions count: {len(dedup)}")
+        logger.warning(f"[DEBUG SUMMARY] Summary block being sent to LLM: '{summary_block}'")
+        logger.warning(f"[DEBUG SUMMARY] If LLM outputs different instructions, it's hallucinating!")
+
         await ctx.session.generate_reply(instructions=f"""
 Here are the discharge instructions you captured:\n{summary_block}
 
@@ -1214,9 +1235,10 @@ Give me one moment while I send the instruction summary.
         response = await self._original_generate_reply(*args, **kwargs)
 
         # Log the generated response if available
+        # Note: generate_reply() returns SpeechHandle objects without text_content
+        # Assistant responses are captured by the conversation_item_added event handler instead
         if hasattr(response, 'text_content') and response.text_content:
             logger.info(f"[LLM GENERATE_REPLY] {response.text_content}")
-
             # Store conversation in OpenAI format for file logging
             self._add_to_openai_conversation("assistant", response.text_content)
 

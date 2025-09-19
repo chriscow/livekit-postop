@@ -20,6 +20,7 @@ import json
 import asyncio
 import argparse
 import time
+import yaml
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -32,12 +33,19 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 from shared.redis_database import get_database, close_database
 
+# Import OpenAI for LLM judge evaluation
+try:
+    import openai
+except ImportError:
+    openai = None
+
 
 class EvaluationRunner:
     """Runs evaluations against existing sessions with database tracking"""
 
-    def __init__(self, verbose: bool = False):
+    def __init__(self, verbose: bool = False, enable_llm_judge: bool = False):
         self.verbose = verbose
+        self.enable_llm_judge = enable_llm_judge
         self.database = None
 
     async def initialize(self):
@@ -66,6 +74,173 @@ class EvaluationRunner:
                 if content:
                     user_messages.append(content)
         return user_messages
+
+    def _convert_transcript_to_yaml(self, transcript: List[Dict]) -> str:
+        """Convert OpenAI conversation format to simple YAML with user/bot entries"""
+        conversation_entries = []
+
+        for message in transcript:
+            if not isinstance(message, dict):
+                continue
+
+            role = message.get('role', '')
+            content = message.get('content', '').strip()
+
+            # Skip empty messages, system messages, and tool messages
+            if not content or role in ['system', 'tool']:
+                continue
+
+            # Convert role names to simple user/bot format
+            if role == 'user':
+                conversation_entries.append({'user': content})
+            elif role == 'assistant':
+                conversation_entries.append({'bot': content})
+
+        if not conversation_entries:
+            return "# No conversation content found\n"
+
+        # Convert to YAML format
+        try:
+            yaml_content = yaml.dump(conversation_entries,
+                                   default_flow_style=False,
+                                   allow_unicode=True,
+                                   sort_keys=False,
+                                   width=1000)  # Prevent line wrapping
+            return yaml_content
+        except Exception as e:
+            return f"# Error converting to YAML: {e}\n"
+
+    async def llm_judge_evaluation(self, yaml_transcript: str, original_instructions: List, eval_instructions: List) -> Dict[str, Any]:
+        """Use OpenAI LLM to evaluate if discharge instructions were properly captured and restated"""
+
+        if not openai:
+            return {
+                'error': 'OpenAI library not available',
+                'status': 'failed'
+            }
+
+        if not os.getenv("OPENAI_API_KEY"):
+            return {
+                'error': 'OPENAI_API_KEY environment variable not set',
+                'status': 'failed'
+            }
+
+        try:
+            # Prepare instruction summaries for comparison
+            original_summary = self._format_instructions_for_prompt(original_instructions)
+            eval_summary = self._format_instructions_for_prompt(eval_instructions)
+
+            # Create evaluation prompt
+            evaluation_prompt = f"""You are evaluating a medical discharge conversation between a healthcare provider, patient, and an AI assistant named Maya. Your task is to assess how well Maya captured and restated the discharge instructions.
+
+CONTEXT:
+- Maya is designed to listen to discharge instructions and provide a summary back to confirm accuracy
+- The conversation transcript is provided in YAML format below
+- You should evaluate Maya's performance in capturing and restating discharge instructions
+
+ORIGINAL INSTRUCTIONS (from previous session):
+{original_summary}
+
+EVALUATION INSTRUCTIONS (from current evaluation run):
+{eval_summary}
+
+CONVERSATION TRANSCRIPT:
+```yaml
+{yaml_transcript}
+```
+
+Please evaluate the following aspects and respond with a JSON object:
+
+1. **Instruction Capture Quality**: How well did Maya identify and capture the discharge instructions?
+2. **Restatement Accuracy**: How accurately did Maya restate the instructions back to the participants?
+3. **Completeness**: Did Maya capture all the important discharge instructions?
+4. **Clinical Appropriateness**: Are the captured instructions medically appropriate and clear?
+
+Respond with this exact JSON structure:
+{{
+    "capture_quality_score": <1-10 integer>,
+    "restatement_accuracy_score": <1-10 integer>,
+    "completeness_score": <1-10 integer>,
+    "clinical_appropriateness_score": <1-10 integer>,
+    "overall_score": <1-10 integer>,
+    "strengths": ["<list of specific strengths>"],
+    "areas_for_improvement": ["<list of specific areas needing improvement>"],
+    "missed_instructions": ["<list of instructions Maya should have captured but didn't>"],
+    "incorrect_captures": ["<list of instructions Maya captured incorrectly>"],
+    "evaluation_summary": "<brief 2-3 sentence summary of Maya's performance>"
+}}"""
+
+            # Call OpenAI API
+            client = openai.AsyncOpenAI()
+            response = await client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a medical AI evaluation expert. Provide thorough, objective assessments in valid JSON format."
+                    },
+                    {
+                        "role": "user",
+                        "content": evaluation_prompt
+                    }
+                ],
+                max_tokens=2000,
+                temperature=0.1,  # Low temperature for consistent evaluation
+                timeout=30.0
+            )
+
+            # Parse response
+            response_content = response.choices[0].message.content.strip()
+
+            # Try to extract JSON from response
+            try:
+                # Handle potential markdown code blocks
+                if "```json" in response_content:
+                    start = response_content.find("```json") + 7
+                    end = response_content.rfind("```")
+                    response_content = response_content[start:end].strip()
+                elif "```" in response_content:
+                    start = response_content.find("```") + 3
+                    end = response_content.rfind("```")
+                    response_content = response_content[start:end].strip()
+
+                llm_evaluation = json.loads(response_content)
+                llm_evaluation['status'] = 'success'
+                llm_evaluation['model_used'] = 'gpt-4'
+
+                if self.verbose:
+                    print(f"✅ LLM Judge evaluation completed successfully")
+                    print(f"📊 Overall Score: {llm_evaluation.get('overall_score', 'N/A')}/10")
+
+                return llm_evaluation
+
+            except json.JSONDecodeError as e:
+                return {
+                    'error': f'Failed to parse LLM response as JSON: {e}',
+                    'raw_response': response_content,
+                    'status': 'failed'
+                }
+
+        except Exception as e:
+            return {
+                'error': f'LLM evaluation failed: {str(e)}',
+                'status': 'failed'
+            }
+
+    def _format_instructions_for_prompt(self, instructions: List) -> str:
+        """Format instructions list for inclusion in LLM prompt"""
+        if not instructions:
+            return "No instructions found"
+
+        formatted_instructions = []
+        for i, instruction in enumerate(instructions, 1):
+            if isinstance(instruction, dict):
+                text = instruction.get('text', str(instruction))
+            else:
+                text = str(instruction)
+            formatted_instructions.append(f"{i}. {text.strip()}")
+
+        return "\n".join(formatted_instructions)
 
     async def run_chat_evaluation(self, user_messages: List[str], eval_session_id: str) -> Dict[str, Any]:
         """Run the agent evaluation by calling the chat interface directly"""
@@ -329,6 +504,37 @@ if __name__ == "__main__":
         # Compare results
         comparison = self.compare_results(source_session, eval_results)
 
+        # Run LLM judge evaluation if enabled
+        llm_judge_results = None
+        if self.enable_llm_judge:
+            print(f"🧠 Running LLM judge evaluation...")
+            try:
+                # Convert both original and evaluation transcripts to YAML
+                original_transcript = source_session.get('transcript', [])
+                eval_transcript = eval_results['session_userdata'].get('openai_conversation', [])
+
+                # For LLM judge, we want to evaluate the evaluation transcript against the original
+                yaml_transcript = self._convert_transcript_to_yaml(eval_transcript)
+
+                # Run LLM judge evaluation
+                llm_judge_results = await self.llm_judge_evaluation(
+                    yaml_transcript=yaml_transcript,
+                    original_instructions=source_session.get('collected_instructions', []),
+                    eval_instructions=eval_results.get('collected_instructions', [])
+                )
+
+                if llm_judge_results.get('status') == 'success':
+                    print(f"📊 LLM Judge Overall Score: {llm_judge_results.get('overall_score', 'N/A')}/10")
+                else:
+                    print(f"⚠️  LLM Judge evaluation failed: {llm_judge_results.get('error', 'Unknown error')}")
+
+            except Exception as e:
+                print(f"❌ LLM Judge evaluation error: {e}")
+                llm_judge_results = {
+                    'error': f'LLM judge evaluation failed: {str(e)}',
+                    'status': 'failed'
+                }
+
         # Create final results
         final_results = {
             'evaluation_metadata': {
@@ -344,7 +550,8 @@ if __name__ == "__main__":
                 'original_instructions': source_session.get('collected_instructions', [])
             },
             'evaluation_results': eval_results,
-            'comparison': comparison
+            'comparison': comparison,
+            'llm_judge_evaluation': llm_judge_results
         }
 
         # Output results
@@ -372,6 +579,49 @@ if __name__ == "__main__":
             for extra in comparison['extra_instructions']:
                 print(f"  + {extra}")
 
+        # Display LLM judge results if available
+        if llm_judge_results and llm_judge_results.get('status') == 'success':
+            print(f"\n🧠 LLM JUDGE EVALUATION")
+            print(f"{'='*50}")
+            print(f"Overall Score: {llm_judge_results.get('overall_score', 'N/A')}/10")
+            print(f"Capture Quality: {llm_judge_results.get('capture_quality_score', 'N/A')}/10")
+            print(f"Restatement Accuracy: {llm_judge_results.get('restatement_accuracy_score', 'N/A')}/10")
+            print(f"Completeness: {llm_judge_results.get('completeness_score', 'N/A')}/10")
+            print(f"Clinical Appropriateness: {llm_judge_results.get('clinical_appropriateness_score', 'N/A')}/10")
+
+            strengths = llm_judge_results.get('strengths', [])
+            if strengths:
+                print(f"\n✅ Strengths:")
+                for strength in strengths:
+                    print(f"  • {strength}")
+
+            improvements = llm_judge_results.get('areas_for_improvement', [])
+            if improvements:
+                print(f"\n⚠️  Areas for Improvement:")
+                for improvement in improvements:
+                    print(f"  • {improvement}")
+
+            missed = llm_judge_results.get('missed_instructions', [])
+            if missed:
+                print(f"\n❌ Missed Instructions:")
+                for instruction in missed:
+                    print(f"  • {instruction}")
+
+            incorrect = llm_judge_results.get('incorrect_captures', [])
+            if incorrect:
+                print(f"\n🔄 Incorrect Captures:")
+                for instruction in incorrect:
+                    print(f"  • {instruction}")
+
+            summary = llm_judge_results.get('evaluation_summary', '')
+            if summary:
+                print(f"\n📝 Summary: {summary}")
+
+        elif llm_judge_results and llm_judge_results.get('status') == 'failed':
+            print(f"\n🧠 LLM JUDGE EVALUATION")
+            print(f"{'='*50}")
+            print(f"❌ LLM Judge evaluation failed: {llm_judge_results.get('error', 'Unknown error')}")
+
         # Save to file if requested
         if output_file:
             with open(output_file, 'w') as f:
@@ -391,6 +641,7 @@ Examples:
   %(prog)s session_1758066459                    Run evaluation on session
   %(prog)s session_1758066459 --verbose          Show detailed progress
   %(prog)s session_1758066459 --output-file results.json  Save results to file
+  %(prog)s session_1758066459 --enable-llm-judge Include LLM judge evaluation
         """
     )
 
@@ -410,6 +661,12 @@ Examples:
         help="Show detailed progress output"
     )
 
+    parser.add_argument(
+        "--enable-llm-judge",
+        action="store_true",
+        help="Enable LLM judge evaluation using OpenAI (requires OPENAI_API_KEY)"
+    )
+
     args = parser.parse_args()
 
     # Check database configuration
@@ -422,8 +679,19 @@ Examples:
         print("❌ OPENAI_API_KEY environment variable not set")
         return 1
 
+    # Check OpenAI library availability if LLM judge is enabled
+    if args.enable_llm_judge and not openai:
+        print("❌ OpenAI library not available. Install with: pip install openai")
+        return 1
+
+    # Show LLM judge status
+    if args.enable_llm_judge:
+        print("🧠 LLM Judge evaluation enabled")
+    elif args.verbose:
+        print("ℹ️  LLM Judge evaluation disabled (use --enable-llm-judge to enable)")
+
     # Run evaluation
-    runner = EvaluationRunner(verbose=args.verbose)
+    runner = EvaluationRunner(verbose=args.verbose, enable_llm_judge=args.enable_llm_judge)
 
     try:
         await runner.initialize()
